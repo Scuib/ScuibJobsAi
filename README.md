@@ -14,7 +14,7 @@ graph TD
     B -->|ParsedJob| C(Validator: Rules)
     C -->|Staged ParsedJob| D[(Persistence Store)]
     D -->|Staged Queue| E[Admin Panel UI]
-    E -->|Approved Job| F[Handoff: Dozie's Algorithm]
+    E -->|Approved Job| F[Handoff: Scuib AI Algorithm]
 ```
 
 ### Modular Interfaces ([core/interfaces.py](file:///c:/Users/HomePC/Downloads/pipeline-backend/pipeline-backend/core/interfaces.py))
@@ -140,6 +140,6 @@ Explore the interactive API docs at:
 
 ## Rollout Strategy
 
-* **Phase 1 (Active)**: In-Memory Store & Mock Handoff. Validates that LLM extraction produces clean JSON structure that aligns with Dozie's algorithm requirements. Uses Manual Ingestion via pasted text blocks.
+* **Phase 1 (Active)**: In-Memory Store & Mock Handoff. Validates that LLM extraction produces clean JSON structure that aligns with Scuib AI algorithm requirements. Uses Manual Ingestion via pasted text blocks.
 * **Phase 2**: Live staging and database configuration. Add `SUPABASE_URL` / `SUPABASE_KEY` / `HANDOFF_ENDPOINT` variables in `.env` to automatically switch components without rebuilding code. Indeed RSS parsing goes live.
 * **Phase 3**: Scaling and cost optimizations. JSearch API ingestion is activated, proxy rotations are configured, and prompt optimizations are completed to minimize Gemini token expenses.
