@@ -1,0 +1,97 @@
+# === Operating System Files ===
+.DS_Store
+Thumbs.db
+*.ini
+
+# === IDEs and Editors ===
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# === Environment Variables & Secrets (CRITICAL) ===
+.env
+.env.[a-zA-Z]*
+!.env.example
+secrets.yaml
+*.pem
+*.key
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environments
+.env/
+.venv/
+venv/
+ENV/
+env/
+ENV/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Testing / Coverage
+htmlcov/
+.toml
+.cache
+.pytest_cache/
+.coverage
+.coverage.*
+.hypothesis/
+.nof記錄
+
+# === Go ===
+# Binaries and archives
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Common build targets
+bin/
+dist/
+
+# === Frontend / Node (If applicable) ===
+node_modules/
+.pnpm-store/
+.next/
+out/
+.nuxt/
+dist/
+.cache/
+
+# === Logs and Databases ===
+*.log
+*.sqlite3
+*.db
