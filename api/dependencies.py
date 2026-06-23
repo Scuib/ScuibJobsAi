@@ -14,6 +14,9 @@ from core.pipeline import JobPipeline
 from core.interfaces import BaseStore
 
 from ingestion.ingesters import IndeedRSSIngester, ManualIngester, JSearchIngester
+from ingestion.aggregator import MultiSourceAggregator
+from ingestion.adzuna_ingester import AdzunaIngester
+from core.models import JobSource
 from parsing.gemini_parser import GeminiParser
 from validation.validators import SchemaValidator
 from handoff.handlers import HTTPHandoff, MockHandoff, FileHandoff
@@ -43,17 +46,104 @@ def _build_handoff():
     return FileHandoff(output_path=output_file)
 
 
+def build_dynamic_aggregator(
+    queries: list[str],
+    locations: list[str],
+    sources: list[JobSource],
+    target_count: int = 200,
+    remote_only: bool = False,
+    date_posted: str = "week",
+) -> MultiSourceAggregator:
+    """
+    Dynamically constructs a MultiSourceAggregator with one or more concrete
+    ingesters configured per query/location combination based on user specifications.
+    """
+    ingesters = []
+
+    # 1. JSearch API
+    if JobSource.JSEARCH_API in sources:
+        jsearch_key = os.getenv("JSEARCH_API_KEY")
+        if jsearch_key:
+            pages = int(os.getenv("JSEARCH_PAGES", "10"))
+            for query in queries:
+                for location in locations:
+                    ingesters.append(JSearchIngester(
+                        api_key=jsearch_key,
+                        query=query,
+                        location=location,
+                        remote_only=remote_only,
+                        pages=pages,
+                        date_posted=date_posted,
+                    ))
+        else:
+            print("WARNING: JSearch source requested but JSEARCH_API_KEY not configured. Skipping.")
+
+    # 2. Indeed RSS
+    if JobSource.INDEED_RSS in sources:
+        max_pages = int(os.getenv("INDEED_PAGES", "5"))
+        for location in locations:
+            ingesters.append(IndeedRSSIngester(
+                query="",  # Handled by queries list
+                queries=queries,
+                location=location,
+                max_pages=max_pages,
+            ))
+
+    # 3. Adzuna API
+    if JobSource.ADZUNA_API in sources:
+        adzuna_id = os.getenv("ADZUNA_APP_ID")
+        adzuna_key = os.getenv("ADZUNA_APP_KEY")
+        if adzuna_id and adzuna_key:
+            pages = int(os.getenv("ADZUNA_PAGES", "5"))
+            for query in queries:
+                for location in locations:
+                    # Determine country from location if possible, default to us
+                    country = "us"
+                    loc_lower = location.lower()
+                    if "united kingdom" in loc_lower or "uk" in loc_lower:
+                        country = "gb"
+                    elif "canada" in loc_lower or "ca" in loc_lower:
+                        country = "ca"
+                    elif "australia" in loc_lower or "au" in loc_lower:
+                        country = "au"
+                    elif "germany" in loc_lower or "de" in loc_lower:
+                        country = "de"
+
+                    ingesters.append(AdzunaIngester(
+                        app_id=adzuna_id,
+                        app_key=adzuna_key,
+                        query=query,
+                        location=location,
+                        country=country,
+                        pages=pages,
+                        date_posted=date_posted,
+                    ))
+        else:
+            print("WARNING: Adzuna source requested but ADZUNA_APP_ID/KEY not configured. Skipping.")
+
+    return MultiSourceAggregator(
+        ingesters=ingesters,
+        target_count=target_count,
+    )
+
+
 def _build_ingester():
-    jsearch_key = os.getenv("JSEARCH_API_KEY")
-    if jsearch_key:
-        return JSearchIngester(
-            api_key=jsearch_key,
-            query=os.getenv("INGEST_QUERY", "software engineer"),
-            location=os.getenv("INGEST_LOCATION", "United States"),
-        )
-    return IndeedRSSIngester(
-        query=os.getenv("INGEST_QUERY", "software engineer"),
-        location=os.getenv("INGEST_LOCATION", "remote"),
+    queries_raw = os.getenv("INGEST_QUERIES", "software engineer,backend developer,python developer")
+    queries = [q.strip() for q in queries_raw.split(",") if q.strip()]
+
+    locations_raw = os.getenv("INGEST_LOCATIONS", "remote,United States")
+    locations = [l.strip() for l in locations_raw.split(",") if l.strip()]
+
+    sources = [JobSource.JSEARCH_API, JobSource.INDEED_RSS, JobSource.ADZUNA_API]
+    target_count = int(os.getenv("TARGET_JOB_COUNT", "200"))
+    date_posted = os.getenv("DATE_POSTED_FILTER", "week")
+
+    return build_dynamic_aggregator(
+        queries=queries,
+        locations=locations,
+        sources=sources,
+        target_count=target_count,
+        date_posted=date_posted,
     )
 
 
@@ -75,7 +165,7 @@ def _build_pipeline() -> JobPipeline:
         validator=SchemaValidator(),
         handoff=_build_handoff(),
         store=store,
-        max_concurrent_parses=int(os.getenv("MAX_CONCURRENT_PARSES", "5")),
+        max_concurrent_parses=int(os.getenv("MAX_CONCURRENT_PARSES", "15")),
     )
 
 

@@ -1,19 +1,27 @@
-"""
-api/app.py
-
-FastAPI application. All pipeline dependencies are injected via
-FastAPI's DI system — no concrete implementations hardcoded here.
-Swap store/parser/handoff at startup in config.py.
-"""
-
+import asyncio
+import logging
+import os
+import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from core.models import ParsedJob, JobStatus, PipelineResult, RawJob, JobSource
+from core.models import (
+    ParsedJob,
+    JobStatus,
+    PipelineResult,
+    RawJob,
+    JobSource,
+    BulkIngestionRequest,
+    IngestionRunStatus,
+    IngestionStats,
+)
 from core.pipeline import JobPipeline
-from api.dependencies import get_pipeline, get_store
+from core.metrics import get_metrics_collector
+from api.dependencies import get_pipeline, get_store, build_dynamic_aggregator
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -53,18 +61,31 @@ class ManualIngestRequest(BaseModel):
     raw_text: str
     source_url: str | None = None
 
+
 class ReviewDecision(BaseModel):
     reviewer: str
     notes: str = ""
+
 
 class BulkApproveRequest(BaseModel):
     job_ids: list[str]
     reviewer: str
 
+
 class TriggerIngestionRequest(BaseModel):
     source: JobSource = JobSource.INDEED_RSS
     query: str = "software engineer"
     location: str = "remote"
+
+
+class BulkActionRequest(BaseModel):
+    action: str = Field(..., description="approve | reject")
+    reviewer: str
+    reason: str = ""
+    # Filters
+    confidence_min: float | None = None
+    exclude_flagged: bool = False
+    job_ids: list[str] | None = None
 
 
 # ─── Phase 1: Ingestion endpoints ─────────────────────────────────────────────
@@ -98,6 +119,116 @@ async def trigger_ingestion(
     """
     background_tasks.add_task(pipeline.run_ingestion_cycle)
     return {"message": "Ingestion cycle started in background", "source": body.source}
+
+
+async def run_bulk_ingestion_background(
+    pipeline: JobPipeline,
+    queries: list[str],
+    locations: list[str],
+    sources: list[JobSource],
+    target_count: int,
+    remote_only: bool,
+    date_posted: str,
+    run_id: str,
+    auto_approve_threshold: float | None = None,
+):
+    try:
+        # Build the dynamic aggregator
+        aggregator = build_dynamic_aggregator(
+            queries=queries,
+            locations=locations,
+            sources=sources,
+            target_count=target_count,
+            remote_only=remote_only,
+            date_posted=date_posted,
+        )
+
+        def _progress_log(step: str, current: int, total: int):
+            logger.info(f"BulkIngestion[{run_id}] - {step}: {current}/{total}")
+
+        # Run it
+        await pipeline.run_bulk_ingestion(
+            aggregator=aggregator,
+            run_id=run_id,
+            auto_approve_threshold=auto_approve_threshold,
+            progress_callback=_progress_log,
+        )
+    except Exception as e:
+        logger.error(f"Bulk ingestion background task {run_id} failed: {e}", exc_info=True)
+
+
+@app.post("/ingest/bulk", response_model=dict, tags=["Ingestion"])
+async def trigger_bulk_ingestion(
+    body: BulkIngestionRequest,
+    background_tasks: BackgroundTasks,
+    pipeline: JobPipeline = Depends(get_pipeline),
+):
+    """
+    Enterprise endpoint. Kicks off a multi-source ingestion run in the background.
+    Returns a run_id immediately to poll for progress.
+    """
+    run_id = str(uuid.uuid4())
+    
+    # Auto-approve threshold configuration via env var
+    auto_approve_val = os.getenv("AUTO_APPROVE_CONFIDENCE_THRESHOLD")
+    auto_approve_threshold = float(auto_approve_val) if auto_approve_val else None
+
+    background_tasks.add_task(
+        run_bulk_ingestion_background,
+        pipeline=pipeline,
+        queries=body.queries,
+        locations=body.locations,
+        sources=body.sources,
+        target_count=body.target_count,
+        remote_only=body.remote_only,
+        date_posted=body.date_posted,
+        run_id=run_id,
+        auto_approve_threshold=auto_approve_threshold,
+    )
+    
+    return {
+        "message": "Bulk ingestion run scheduled in background.",
+        "run_id": run_id,
+    }
+
+
+@app.get("/ingest/runs/{run_id}/status", response_model=IngestionRunStatus, tags=["Ingestion"])
+async def get_run_status(run_id: str):
+    """Poll progress and metrics for a specific bulk ingestion run."""
+    collector = get_metrics_collector()
+    run = collector.get_run(run_id)
+    
+    if run:
+        return IngestionRunStatus(
+            run_id=run_id,
+            state="running",
+            fetched=run.fetched,
+            parsed=run.parsed,
+            errors=run.errors,
+            duplicates=run.duplicates,
+            per_source=dict(run.per_source),
+            message="Ingestion run is currently active and processing.",
+        )
+    
+    # Check completed/archived runs
+    snapshot = collector.get_snapshot()
+    for r in snapshot["recent_runs"]:
+        if r["run_id"] == run_id:
+            return IngestionRunStatus(
+                run_id=run_id,
+                state="completed",
+                fetched=r["fetched"],
+                parsed=r["parsed"],
+                errors=r["errors"],
+                duplicates=r["duplicates"],
+                per_source=r["per_source"],
+                message="Ingestion run completed successfully.",
+            )
+            
+    raise HTTPException(
+        status_code=404, 
+        detail=f"Run {run_id} not found or metrics have expired."
+    )
 
 
 # ─── Phase 2: Review queue endpoints ──────────────────────────────────────────
@@ -164,6 +295,52 @@ async def bulk_approve(
 ):
     """Approve and send multiple jobs in one call."""
     return await pipeline.send_approved_batch(body.job_ids, body.reviewer)
+
+
+@app.post("/jobs/bulk-action", response_model=list[PipelineResult], tags=["Review"])
+async def bulk_action(
+    body: BulkActionRequest,
+    pipeline: JobPipeline = Depends(get_pipeline),
+    store=Depends(get_store),
+):
+    """
+    Bulk approve or reject jobs, with optional filters such as minimum confidence
+    or specific job IDs.
+    """
+    if body.job_ids is not None:
+        target_ids = body.job_ids
+    else:
+        pending = await store.get_pending(limit=1000)
+        target_ids = []
+        for job in pending:
+            if body.confidence_min is not None and job.confidence < body.confidence_min:
+                continue
+            if body.exclude_flagged and job.validation_issues:
+                continue
+            target_ids.append(job.id)
+
+    if not target_ids:
+        return []
+
+    if body.action == "approve":
+        return await pipeline.send_approved_batch(target_ids, body.reviewer)
+    elif body.action == "reject":
+        tasks = [pipeline.reject(jid, body.reviewer, body.reason) for jid in target_ids]
+        return await asyncio.gather(*tasks)
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid bulk action: {body.action}")
+
+
+@app.get("/jobs/stats", tags=["Dashboard"])
+async def get_jobs_stats(store=Depends(get_store)):
+    """Get aggregate statistics across all jobs (parsed, pending, sent, etc.)."""
+    return await store.get_stats()
+
+
+@app.get("/metrics", tags=["System"])
+async def get_metrics():
+    """Returns in-memory snapshot metrics for monitoring."""
+    return get_metrics_collector().get_snapshot()
 
 
 # ─── Health ────────────────────────────────────────────────────────────────────

@@ -146,3 +146,58 @@ class PipelineResult(BaseModel):
     status:   JobStatus | None = None
     message:  str = ""
     errors:   list[str] = Field(default_factory=list)
+
+
+# ─── Enterprise ingestion models ──────────────────────────────────────────────
+
+class IngestionStats(BaseModel):
+    """Detailed stats from a bulk ingestion run."""
+    run_id:            str
+    total_fetched:     int = 0
+    total_parsed:      int = 0
+    total_validated:   int = 0
+    total_flagged:     int = 0
+    total_errors:      int = 0
+    total_duplicates:  int = 0
+    per_source:        dict[str, int] = Field(default_factory=dict)
+    duration_seconds:  float = 0.0
+    jobs_per_second:   float = 0.0
+
+
+class BulkIngestionRequest(BaseModel):
+    """Request schema for enterprise bulk ingestion."""
+    queries:       list[str] = Field(
+        default=["software engineer"],
+        description="Search queries to run across all sources",
+    )
+    locations:     list[str] = Field(
+        default=["remote", "United States"],
+        description="Locations to search in",
+    )
+    sources:       list[JobSource] = Field(
+        default=[JobSource.JSEARCH_API, JobSource.INDEED_RSS, JobSource.ADZUNA_API],
+        description="Which sources to pull from",
+    )
+    target_count:  int = Field(
+        default=200,
+        ge=1,
+        le=2000,
+        description="Stop fetching after this many unique jobs",
+    )
+    remote_only:   bool = False
+    date_posted:   str = Field(
+        default="week",
+        description="Recency filter: today | 3days | week | month",
+    )
+
+
+class IngestionRunStatus(BaseModel):
+    """Status of an active or completed ingestion run for polling."""
+    run_id:     str
+    state:      str = "running"   # running | completed | failed
+    fetched:    int = 0
+    parsed:     int = 0
+    errors:     int = 0
+    duplicates: int = 0
+    per_source: dict[str, int] = Field(default_factory=dict)
+    message:    str = ""

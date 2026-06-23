@@ -104,3 +104,22 @@ class BaseStore(ABC):
     @abstractmethod
     async def get_by_id(self, job_id: str) -> ParsedJob | None:
         ...
+
+    # ─── Batch operations (enterprise) ────────────────────────────────────────
+
+    async def save_raw_batch(self, jobs: list[RawJob]) -> list[str]:
+        """Bulk-insert raw jobs. Default falls back to sequential saves."""
+        return [await self.save_raw(j) for j in jobs]
+
+    async def save_parsed_batch(self, jobs: list[ParsedJob]) -> list[str]:
+        """Bulk-insert parsed jobs. Default falls back to sequential saves."""
+        return [await self.save_parsed(j) for j in jobs]
+
+    async def exists_by_external_id(self, external_id: str) -> bool:
+        """Check if a job with this external_id already exists in the store."""
+        return False  # Default: no dedup (overridden by persistent stores)
+
+    async def get_stats(self) -> dict:
+        """Aggregate stats: count by status, by source, etc."""
+        return {}
+

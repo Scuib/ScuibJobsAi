@@ -1,81 +1,87 @@
 # Automated Job Data Pipeline (ScuibJobsAi Backend)
 
-This is a decoupled, modular job data pipeline designed for job-matching products. The backend manages ingestion, AI-driven parsing, human-in-the-loop approval, and structured handoff to downstream algorithms.
+High-throughput backend for ingesting, parsing, validating, and handing off job listings to downstream matching algorithms. Supports multiple sources, Gemini LLM extraction, human-in-the-loop review, and enterprise resilience primitives.
 
 ---
 
-## Architecture Overview
+## Architecture
 
-The pipeline is fully modular, adhering strictly to abstract interfaces defined in Python's ABC system. Implementation selection is resolved at startup via FastAPI's Dependency Injection system in [dependencies.py](file:///c:/Users/HomePC/Downloads/pipeline-backend/pipeline-backend/api/dependencies.py).
-
-```mermaid
-graph TD
-    A[Ingestion: RSS/API] -->|RawJob| B(AI Parser: Gemini)
-    B -->|ParsedJob| C(Validator: Rules)
-    C -->|Staged ParsedJob| D[(Persistence Store)]
-    D -->|Staged Queue| E[Admin Panel UI]
-    E -->|Approved Job| F[Handoff: Scuib AI Algorithm]
+```
+ingestion/ → parsing/ → validation/ → store/ → handoff/
+                  ↕ (human-in-the-loop approval via API)
 ```
 
-### Modular Interfaces ([core/interfaces.py](file:///c:/Users/HomePC/Downloads/pipeline-backend/pipeline-backend/core/interfaces.py))
-* **`BaseIngester`**: Retrieves raw jobs from external sources (RSS feeds, JSearch RapidAPI, manual pastes).
-* **`BaseParser`**: Extracts structured JSON from unstructured text using LLMs.
-* **`BaseValidator`**: Runs validation checks on LLM outputs to identify missing fields or salary abnormalities.
-* **`BaseStore`**: Manages persistence (in-memory or Supabase database).
-* **`BaseHandoff`**: Submits validated jobs to downstream matching systems (mock, file append, or HTTP POST).
+### Pipeline stages
+
+| Stage | Component | Responsibility |
+|-------|-----------|----------------|
+| Ingestion | `BaseIngester` | Pull raw jobs from JSearch API, Indeed RSS, Adzuna API, or manual paste |
+| Parsing | `BaseParser` (`GeminiParser`) | Extract structured JSON via Gemini LLM with chunked concurrency |
+| Validation | `BaseValidator` (`SchemaValidator`) | Rule checks on LLM output (required fields, salary sanity, parse failure) |
+| Store | `BaseStore` | Persistence — auto-chooses `SupabaseStore` or falls back to `InMemoryStore` |
+| Handoff | `BaseHandoff` | Delivery to downstream — auto-chooses `HTTPHandoff` or falls back to `FileHandoff` |
+
+Interfaces defined in [`core/interfaces.py`](core/interfaces.py). Wiring via DI in [`api/dependencies.py`](api/dependencies.py). Orchestration in [`core/pipeline.py`](core/pipeline.py).
+
+### Resilience primitives ([`core/resilience.py`](core/resilience.py), [`core/metrics.py`](core/metrics.py))
+- **`CircuitBreaker`** — per-source: skip after N consecutive failures, probe on cooldown expiry
+- **`AdaptiveRateLimiter`** — token bucket that halves on 429s, gradually recovers
+- **`retry_with_backoff`** — exponential backoff + jitter for page-level API calls
+- **`MetricsCollector`** — singleton tracking p50/p95/p99 parse latencies, per-source counts, active runs
 
 ---
 
 ## Tech Stack
-* **Python 3.11+**
-* **FastAPI** & **Uvicorn** (Async API layer)
-* **Pydantic v2** (Type validation & contracts)
-* **google-generativeai** (Gemini 2.5/1.5 Flash for extraction)
-* **HTTPX** (Async network HTTP requests)
-* **Supabase** (Postgres persistence via raw Supabase client)
+- **Python 3.11+**
+- **FastAPI** & **Uvicorn**
+- **Pydantic v2**
+- **google-generativeai** (Gemini 1.5 Flash/Pro)
+- **HTTPX** (async HTTP)
+- **Supabase** (optional Postgres persistence)
 
 ---
 
-## Installation & Environment Setup
+## Setup
 
-1. **Clone and Navigate**:
-   ```bash
-   cd pipeline-backend
-   ```
+```bash
+pip install -r requirements.txt
+cp .env.example .env   # then fill in credentials
+```
 
-2. **Set Up Python Environment**:
-   It is recommended to use a virtual environment:
-   ```bash
-   python -m venv .venv
-   # Windows PowerShell:
-   .venv\Scripts\Activate.ps1
-   # Linux/macOS:
-   source .venv/bin/activate
-   ```
+### Required env vars
 
-3. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+| Variable | Purpose |
+|----------|---------|
+| `GEMINI_API_KEY` | Google AI Studio API key — mandatory |
 
-4. **Configure Environment Variables**:
-   Copy `.env.example` to `.env` and fill in the values:
-   ```bash
-   cp .env.example .env
-   ```
+### Optional but commonly used
 
-   **`.env` Options**:
-   * `GEMINI_API_KEY`: *[Required]* Your Google AI Studio API key.
-   * `GEMINI_MODEL`: Defaults to `gemini-1.5-flash` or `gemini-2.5-flash`.
-   * `SUPABASE_URL` & `SUPABASE_KEY`: If provided, switches store dynamically to `SupabaseStore`. Leave empty to use `InMemoryStore`.
-   * `HANDOFF_ENDPOINT_URL` & `HANDOFF_API_KEY`: If provided, posts approved jobs to the downstream endpoint. Leave empty to use `FileHandoff` (`handoff_output.jsonl`).
-   * `INGEST_QUERY` & `INGEST_LOCATION`: Configures the search query for the live RSS parser.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SUPABASE_URL`, `SUPABASE_KEY` | — | When set, uses `SupabaseStore`; otherwise `InMemoryStore` |
+| `HANDOFF_ENDPOINT_URL` | — | When set, posts to downstream via `HTTPHandoff`; otherwise writes `handoff_output.jsonl` |
+| `HANDOFF_API_KEY` | — | Bearer token for the handoff endpoint |
+| `HANDOFF_FILE_PATH` | `handoff_output.jsonl` | Output file when endpoint is unset |
+| `JSEARCH_API_KEY` | — | RapidAPI key for JSearch |
+| `JSEARCH_PAGES` | `10` | Pages per query (10 results/page) |
+| `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | — | Adzuna API credentials (free tier: 250 calls/day) |
+| `ADZUNA_PAGES` | `5` | Pages per query (50 results/page) |
+| `INGEST_QUERIES` | `software engineer,backend developer,python developer` | Comma-separated query list |
+| `INGEST_LOCATIONS` | `remote,United States` | Comma-separated location list |
+| `TARGET_JOB_COUNT` | `200` | Stop after this many unique jobs |
+| `DATE_POSTED_FILTER` | `week` | `today`, `3days`, `week`, or `month` |
+| `GEMINI_MODEL` | `gemini-1.5-flash` | Falls back to `gemini-1.5-pro` after 3 retries |
+| `AUTO_APPROVE_CONFIDENCE_THRESHOLD` | — | Auto-approve jobs above this confidence (e.g. `0.9`) |
+| `MAX_CONCURRENT_PARSES` | `15` | Semaphore bound for Gemini calls |
+| `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before circuit opens |
+| `CIRCUIT_BREAKER_COOLDOWN` | `60` | Seconds before half-open probe |
+| `RATE_LIMIT_REQUESTS_PER_MINUTE` | `60` | Max LLM API requests/min |
 
 ---
 
-## Database Schema (Phase 2+)
+## Database Schema (Supabase)
 
-If configuring Supabase, run the following SQL commands in your Supabase SQL Editor:
+DDL in [`store/stores.py:105-141`](store/stores.py). Required when `SUPABASE_URL` and `SUPABASE_KEY` are set:
 
 ```sql
 CREATE TABLE raw_jobs (
@@ -118,28 +124,42 @@ CREATE INDEX parsed_jobs_status_idx ON parsed_jobs(status);
 
 ---
 
-## Running the Project
+## Running
 
-### 1. Verification Test (Phase 1 POC)
-Run the script to verify the ingestion, parsing, validation, and handoff flows end-to-end locally with in-memory stores and mock targets:
-```powershell
-$env:PYTHONPATH="."; python scripts/phase1_test.py
-```
-
-### 2. Startup Backend Server
-Launch the FastAPI server:
 ```bash
-uvicorn main:app --reload
+# Dev server
+uvicorn main:app --reload        # → http://127.0.0.1:8000/docs
+
+# Phase 1 manual test (single job → LLM parse → handoff)
+PYTHONPATH=. python scripts/phase1_test.py
+
+# Bulk pipeline test (hermetic dedup, circuit breaker, full flow)
+PYTHONPATH=. python scripts/bulk_test.py
 ```
-Once started, the backend API will serve endpoints at `http://127.0.0.1:8000`.
-Explore the interactive API docs at:
-* Swagger UI: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-* Redoc: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+
+### Key API endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /ingest/manual` | Paste raw text for LLM parse + stage |
+| `POST /ingest/bulk` | Multi-source background ingestion (returns `run_id`) |
+| `GET /ingest/runs/{run_id}/status` | Poll progress of a bulk run |
+| `GET /jobs/pending` | Jobs awaiting human review |
+| `GET /jobs/stats` | Aggregate dashboard stats |
+| `POST /jobs/{id}/approve` | Approve and handoff a single job |
+| `POST /jobs/{id}/reject` | Reject a single job |
+| `POST /jobs/bulk-action` | Approve/reject filtered by ID, confidence, or flagged status |
+| `GET /metrics` | In-memory metrics snapshot |
+| `GET /health` | Liveness check |
 
 ---
 
-## Rollout Strategy
+## Rollout
 
-* **Phase 1 (Active)**: In-Memory Store & Mock Handoff. Validates that LLM extraction produces clean JSON structure that aligns with Scuib AI algorithm requirements. Uses Manual Ingestion via pasted text blocks.
-* **Phase 2**: Live staging and database configuration. Add `SUPABASE_URL` / `SUPABASE_KEY` / `HANDOFF_ENDPOINT` variables in `.env` to automatically switch components without rebuilding code. Indeed RSS parsing goes live.
-* **Phase 3**: Scaling and cost optimizations. JSearch API ingestion is activated, proxy rotations are configured, and prompt optimizations are completed to minimize Gemini token expenses.
+All three phases are complete:
+
+| Phase | What | Status |
+|-------|------|--------|
+| 1 | Manual paste → LLM parse → mock handoff (POC validation) | Done |
+| 2 | Supabase persistence, Indeed RSS + Adzuna, HTTP handoff, human review UI endpoints | Done |
+| 3 | Multi-source concurrent ingestion, chunked parallel LLM parsing, circuit breakers, rate limiters, metrics, bulk API | Done |
