@@ -5,19 +5,29 @@ Dependency injection container.
 Change implementations here — nothing else needs to change.
 Phase 1: InMemoryStore + MockHandoff + ManualIngester
 Phase 2: SupabaseStore + HTTPHandoff + IndeedRSSIngester
+Phase 3+: Custom ingesters (Workable, MyJobMag, Fuzu, JobGurus, Jobberman)
 """
 
 import os
 from functools import lru_cache
 
 from core.pipeline import JobPipeline
-from core.interfaces import BaseStore
+from core.interfaces import BaseStore, BaseParser
 
 from ingestion.ingesters import IndeedRSSIngester, ManualIngester, JSearchIngester
 from ingestion.aggregator import MultiSourceAggregator
 from ingestion.adzuna_ingester import AdzunaIngester
+from ingestion.custom_ingesters import (
+    WorkableIngester,
+    MyJobMagIngester,
+    FuzuIngester,
+    JobGurusIngester,
+    JobbermanIngester,
+)
 from core.models import JobSource
 from parsing.gemini_parser import GeminiParser
+from parsing.structured_parser import StructuredParser
+from parsing.hybrid_parser import HybridParser
 from validation.validators import SchemaValidator
 from handoff.handlers import HTTPHandoff, MockHandoff, FileHandoff
 from store.stores import InMemoryStore, SupabaseStore
@@ -121,6 +131,35 @@ def build_dynamic_aggregator(
         else:
             print("WARNING: Adzuna source requested but ADZUNA_APP_ID/KEY not configured. Skipping.")
 
+    # 4. Workable API
+    if JobSource.WORKABLE in sources:
+        for query in queries:
+            ingesters.append(WorkableIngester(
+                query=query,
+                location=locations[0] if locations else "",
+            ))
+
+    # 5. MyJobMag (Nigerian job board)
+    if JobSource.MYJOBMAG in sources:
+        for query in queries:
+            ingesters.append(MyJobMagIngester(query=query))
+
+    # 6. Fuzu (African job board)
+    if JobSource.FUZU in sources:
+        for query in queries:
+            for location in locations:
+                ingesters.append(FuzuIngester(query=query, location=location))
+
+    # 7. JobGurus (Nigerian job board)
+    if JobSource.JOBGURUS in sources:
+        for query in queries:
+            ingesters.append(JobGurusIngester(query=query))
+
+    # 8. Jobberman (Nigerian job board)
+    if JobSource.JOBBERMAN in sources:
+        for query in queries:
+            ingesters.append(JobbermanIngester(query=query))
+
     return MultiSourceAggregator(
         ingesters=ingesters,
         target_count=target_count,
@@ -134,34 +173,58 @@ def _build_ingester():
     locations_raw = os.getenv("INGEST_LOCATIONS", "remote,United States")
     locations = [l.strip() for l in locations_raw.split(",") if l.strip()]
 
-    sources = [JobSource.JSEARCH_API, JobSource.INDEED_RSS, JobSource.ADZUNA_API]
+    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,fuzu,jobgurus,jobberman")
+    source_map = {
+        "workable": JobSource.WORKABLE,
+        "myjobmag": JobSource.MYJOBMAG,
+        "fuzu": JobSource.FUZU,
+        "jobgurus": JobSource.JOBGURUS,
+        "jobberman": JobSource.JOBBERMAN,
+    }
+    sources = []
+    for s in sources_raw.split(","):
+        s = s.strip().lower()
+        if s in source_map:
+            sources.append(source_map[s])
+
     target_count = int(os.getenv("TARGET_JOB_COUNT", "200"))
-    date_posted = os.getenv("DATE_POSTED_FILTER", "week")
 
     return build_dynamic_aggregator(
         queries=queries,
         locations=locations,
         sources=sources,
         target_count=target_count,
-        date_posted=date_posted,
     )
+
+
+def _build_parser() -> BaseParser:
+    """
+    Build a HybridParser: tries Gemini first, falls back to structured extraction.
+    """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+
+    fallback = StructuredParser()
+
+    if gemini_key:
+        primary = GeminiParser(
+            api_key=gemini_key,
+            model_name=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+            fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-pro"),
+        )
+        return HybridParser(primary=primary, fallback=fallback)
+
+    print("GEMINI_API_KEY not set — using StructuredParser only")
+    return fallback
 
 
 # Singleton pipeline — built once at startup
 @lru_cache(maxsize=1)
 def _build_pipeline() -> JobPipeline:
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_key:
-        raise RuntimeError("GEMINI_API_KEY environment variable is required")
-
     store = _build_store()
 
     return JobPipeline(
         ingester=_build_ingester(),
-        parser=GeminiParser(
-            api_key=gemini_key,
-            model_name=os.getenv("GEMINI_MODEL", "gemini-1.5-flash"),
-        ),
+        parser=_build_parser(),
         validator=SchemaValidator(),
         handoff=_build_handoff(),
         store=store,

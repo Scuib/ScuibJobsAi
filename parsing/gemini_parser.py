@@ -81,8 +81,8 @@ class GeminiParser(BaseParser):
     def __init__(
         self,
         api_key: str,
-        model_name: str = "gemini-1.5-flash",
-        fallback_model: str | None = "gemini-1.5-pro",
+        model_name: str = "gemini-2.0-flash",
+        fallback_model: str | None = "gemini-2.5-pro",
         max_concurrent: int = 10,
         batch_chunk_size: int = 10,
         max_retries: int = 3,

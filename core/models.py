@@ -32,7 +32,12 @@ class JobSource(str, Enum):
     INDEED_RSS  = "indeed_rss"
     JSEARCH_API = "jsearch_api"
     ADZUNA_API  = "adzuna_api"
-    MANUAL      = "manual"      # Phase 1: pasted raw text
+    MANUAL      = "manual"
+    WORKABLE    = "workable"
+    MYJOBMAG    = "myjobmag"
+    FUZU        = "fuzu"
+    JOBGURUS    = "jobgurus"
+    JOBBERMAN   = "jobberman"
 
 
 # ─── Stage 1: Raw ─────────────────────────────────────────────────────────────
