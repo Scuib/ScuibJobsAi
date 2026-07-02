@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import uuid
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status
@@ -130,10 +129,8 @@ async def run_bulk_ingestion_background(
     remote_only: bool,
     date_posted: str,
     run_id: str,
-    auto_approve_threshold: float | None = None,
 ):
     try:
-        # Build the dynamic aggregator
         aggregator = build_dynamic_aggregator(
             queries=queries,
             locations=locations,
@@ -146,11 +143,9 @@ async def run_bulk_ingestion_background(
         def _progress_log(step: str, current: int, total: int):
             logger.info(f"BulkIngestion[{run_id}] - {step}: {current}/{total}")
 
-        # Run it
         await pipeline.run_bulk_ingestion(
             aggregator=aggregator,
             run_id=run_id,
-            auto_approve_threshold=auto_approve_threshold,
             progress_callback=_progress_log,
         )
     except Exception as e:
@@ -164,14 +159,11 @@ async def trigger_bulk_ingestion(
     pipeline: JobPipeline = Depends(get_pipeline),
 ):
     """
-    Enterprise endpoint. Kicks off a multi-source ingestion run in the background.
+    Kicks off a multi-source ingestion run in the background.
+    All jobs are automatically parsed and handed off — no human review needed.
     Returns a run_id immediately to poll for progress.
     """
     run_id = str(uuid.uuid4())
-    
-    # Auto-approve threshold configuration via env var
-    auto_approve_val = os.getenv("AUTO_APPROVE_CONFIDENCE_THRESHOLD")
-    auto_approve_threshold = float(auto_approve_val) if auto_approve_val else None
 
     background_tasks.add_task(
         run_bulk_ingestion_background,
@@ -183,7 +175,6 @@ async def trigger_bulk_ingestion(
         remote_only=body.remote_only,
         date_posted=body.date_posted,
         run_id=run_id,
-        auto_approve_threshold=auto_approve_threshold,
     )
     
     return {
@@ -232,6 +223,12 @@ async def get_run_status(run_id: str):
 
 
 # ─── Phase 2: Review queue endpoints ──────────────────────────────────────────
+
+@app.get("/jobs/stats", tags=["Dashboard"])
+async def get_jobs_stats(store=Depends(get_store)):
+    """Get aggregate statistics across all jobs (parsed, pending, sent, etc.)."""
+    return await store.get_stats()
+
 
 @app.get("/jobs/pending", response_model=list[ParsedJob], tags=["Review"])
 async def get_pending_jobs(
@@ -329,12 +326,6 @@ async def bulk_action(
         return await asyncio.gather(*tasks)
     else:
         raise HTTPException(status_code=400, detail=f"Invalid bulk action: {body.action}")
-
-
-@app.get("/jobs/stats", tags=["Dashboard"])
-async def get_jobs_stats(store=Depends(get_store)):
-    """Get aggregate statistics across all jobs (parsed, pending, sent, etc.)."""
-    return await store.get_stats()
 
 
 @app.get("/metrics", tags=["System"])
