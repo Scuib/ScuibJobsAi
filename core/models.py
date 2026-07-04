@@ -65,6 +65,7 @@ class ParsedJob(BaseModel):
     id:                 str        = Field(default_factory=new_id)
     raw_id:             str                            # FK to RawJob
     status:             JobStatus  = JobStatus.PARSED
+    source:             str | None = None               # Originating source, forwarded from RawJob
 
     # Core extracted fields
     job_title:          str
@@ -105,12 +106,13 @@ class ValidatedJob(BaseModel):
 
 class HandoffPayload(BaseModel):
     """
-    Exact schema Dozie's algorithm receives.
+    Exact schema the downstream matching algorithm receives.
     Adjust fields to match his expected input contract.
     """
     job_id:           str
     job_title:        str
     company:          str | None
+    source:           str | None = None
     location:         str | None
     remote:           bool
     salary_min:       int | None
@@ -130,6 +132,7 @@ class HandoffPayload(BaseModel):
             job_id=p.id,
             job_title=p.job_title,
             company=p.company,
+            source=p.source,
             location=p.location,
             remote=p.remote,
             salary_min=p.salary.min if p.salary else None,

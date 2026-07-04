@@ -58,6 +58,7 @@ class StructuredParser(BaseParser):
 
         return ParsedJob(
             raw_id=raw.id,
+            source=raw.source.value,
             job_title=title,
             company=company,
             location=location,
@@ -96,6 +97,7 @@ class StructuredParser(BaseParser):
             salary=salary,
             required_skills=skills,
             employment_type=emp_type,
+            source=raw.source.value,
             description_clean=_clean_description(text),
             model_used="structured_parser",
             confidence=0.5 if title else 0.3,

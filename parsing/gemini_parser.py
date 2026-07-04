@@ -160,6 +160,7 @@ class GeminiParser(BaseParser):
                     # Create a failure ParsedJob
                     results.append(ParsedJob(
                         raw_id=chunk[i].id,
+                        source=chunk[i].source.value,
                         job_title="[PARSE FAILED]",
                         model_used=self.model_name,
                         confidence=0.0,
@@ -264,6 +265,7 @@ class GeminiParser(BaseParser):
         )
         return ParsedJob(
             raw_id=raw.id,
+            source=raw.source.value,
             job_title="[PARSE FAILED]",
             model_used=self.model_name,
             confidence=0.0,
@@ -310,6 +312,7 @@ class GeminiParser(BaseParser):
 
         return ParsedJob(
             raw_id=raw.id,
+            source=raw.source.value,
             job_title=data.get("job_title", "[UNKNOWN]"),
             company=data.get("company"),
             location=data.get("location"),
