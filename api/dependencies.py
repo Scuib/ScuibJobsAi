@@ -170,19 +170,22 @@ def build_dynamic_aggregator(
 
 
 def _build_ingester():
-    queries_raw = os.getenv("INGEST_QUERIES", "software engineer,backend developer,python developer")
+    queries_raw = os.getenv("INGEST_QUERIES", "software engineer,backend developer,python developer,frontend developer,full stack developer,devops engineer,data scientist,react developer,javascript developer")
     queries = [q.strip() for q in queries_raw.split(",") if q.strip()]
 
-    locations_raw = os.getenv("INGEST_LOCATIONS", "remote,United States")
+    locations_raw = os.getenv("INGEST_LOCATIONS", "remote,United States,United Kingdom,Nigeria,Canada")
     locations = [l.strip() for l in locations_raw.split(",") if l.strip()]
 
-    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,fuzu,jobgurus,jobberman")
+    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,fuzu,jobgurus,jobberman,jsearch_api,indeed_rss,adzuna_api")
     source_map = {
         "workable": JobSource.WORKABLE,
         "myjobmag": JobSource.MYJOBMAG,
         "fuzu": JobSource.FUZU,
         "jobgurus": JobSource.JOBGURUS,
         "jobberman": JobSource.JOBBERMAN,
+        "jsearch_api": JobSource.JSEARCH_API,
+        "indeed_rss": JobSource.INDEED_RSS,
+        "adzuna_api": JobSource.ADZUNA_API,
     }
     sources = []
     for s in sources_raw.split(","):
@@ -190,7 +193,7 @@ def _build_ingester():
         if s in source_map:
             sources.append(source_map[s])
 
-    target_count = int(os.getenv("TARGET_JOB_COUNT", "200"))
+    target_count = int(os.getenv("TARGET_JOB_COUNT", "500"))
 
     return build_dynamic_aggregator(
         queries=queries,
