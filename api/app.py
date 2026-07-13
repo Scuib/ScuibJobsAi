@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Query, status
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Path, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -289,7 +289,7 @@ async def trigger_bulk_ingestion(
     response_description="Current status and counters for the specified ingestion run.",
 )
 async def get_run_status(
-    run_id: str = Query(..., description="The UUID returned by `POST /ingest/bulk`"),
+    run_id: str = Path(..., description="The UUID returned by `POST /ingest/bulk`"),
 ):
     """
     Poll progress of a running or recently completed bulk ingestion run.
@@ -373,7 +373,7 @@ async def get_jobs_stats(store=Depends(get_store)):
     response_description="The full parsed job object with all extracted fields.",
 )
 async def get_job(
-    job_id: str = Query(..., description="The UUID of the job to fetch"),
+    job_id: str = Path(..., description="The UUID of the job to fetch"),
     store=Depends(get_store),
 ):
     """
