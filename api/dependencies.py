@@ -38,9 +38,12 @@ def _build_store() -> BaseStore:
     supabase_key = os.getenv("SUPABASE_KEY")
 
     if supabase_url and supabase_key:
-        return SupabaseStore(url=supabase_url, key=supabase_key)
+        try:
+            return SupabaseStore(url=supabase_url, key=supabase_key)
+        except Exception as e:
+            print(f"WARNING: SupabaseStore init failed ({e}) — falling back to InMemoryStore")
 
-    print("SUPABASE_URL/KEY not set — using InMemoryStore (Phase 1 mode)")
+    print("Using InMemoryStore (no Supabase credentials)")
     return InMemoryStore()
 
 
