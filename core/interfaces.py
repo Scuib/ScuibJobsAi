@@ -7,7 +7,7 @@ Swap implementations without touching downstream code.
 
 from abc import ABC, abstractmethod
 from typing import AsyncIterator
-from core.models import RawJob, ParsedJob, ValidatedJob, HandoffPayload, JobStatus
+from core.models import RawJob, ParsedJob, HandoffPayload, JobStatus
 
 
 class BaseIngester(ABC):
@@ -46,27 +46,28 @@ class BaseParser(ABC):
 
 class BaseValidator(ABC):
     """
-    Applies rules to a ParsedJob before human review.
+    Applies automated validation rules to a ParsedJob.
     Programmatic guards: required fields, salary sanity checks, etc.
+    Issues are logged as annotations — they do not block the pipeline.
     """
 
     @abstractmethod
     async def validate(self, parsed: ParsedJob) -> tuple[bool, list[str]]:
         """
         Returns (is_valid, list_of_issues).
-        Invalid jobs are flagged, not silently dropped.
+        Invalid jobs are flagged but still proceed through the pipeline.
         """
         ...
 
 
 class BaseHandoff(ABC):
     """
-    Delivers a ValidatedJob to the downstream consumer (Dozie's algorithm).
+    Delivers a parsed job to the downstream consumer (matching algorithm).
     Could be HTTP POST, message queue, file drop, etc.
     """
 
     @abstractmethod
-    async def send(self, job: ValidatedJob) -> HandoffPayload:
+    async def send(self, job: ParsedJob) -> HandoffPayload:
         """Deliver job to downstream. Returns a receipt/confirmation."""
         ...
 
@@ -88,17 +89,12 @@ class BaseStore(ABC):
 
     @abstractmethod
     async def save_parsed(self, job: ParsedJob) -> str:
-        """Persist parsed job in pending state."""
+        """Persist parsed job."""
         ...
 
     @abstractmethod
     async def update_status(self, job_id: str, status: JobStatus, notes: str = "") -> None:
         """Update a job's lifecycle status."""
-        ...
-
-    @abstractmethod
-    async def get_pending(self, limit: int = 50) -> list[ParsedJob]:
-        """Fetch jobs awaiting human review."""
         ...
 
     @abstractmethod
@@ -123,3 +119,6 @@ class BaseStore(ABC):
         """Aggregate stats: count by status, by source, etc."""
         return {}
 
+    async def get_all_jobs(self, limit: int = 100, status: str | None = None) -> list[ParsedJob]:
+        """Fetch jobs with optional status filter. For monitoring/dashboard use."""
+        return []

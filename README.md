@@ -1,103 +1,160 @@
-# Automated Job Data Pipeline (ScuibJobsAi Backend)
+# ScuibJobsAi — Automated Job Data Pipeline
 
-High-throughput backend for ingesting, parsing, validating, and handing off job listings to downstream matching algorithms. Supports multiple sources, Gemini LLM extraction, human-in-the-loop review, and enterprise resilience primitives.
+Fully automatic backend that ingests job listings from multiple sources, parses them with AI (Google Gemini), validates the extracted data, and hands off every job to the downstream matching algorithm — **no human approval needed**.
 
 ---
 
-## Architecture
+## How It Works
 
 ```
-ingestion/ → parsing/ → validation/ → store/ → handoff/
-                  ↕ (human-in-the-loop approval via API)
+Source A ─┐
+Source B ─┤                                                    
+Source C ─┼─→  Fetch  →  Deduplicate  →  AI Parse  →  Validate  →  Handoff
+Source D ─┤                                                    
+Source E ─┘                                                    
 ```
 
-### Pipeline stages
+Every job flows through this pipeline automatically:
 
-| Stage | Component | Responsibility |
-|-------|-----------|----------------|
-| Ingestion | `BaseIngester` | Pull raw jobs from Workable API, MyJobMag, Fuzu, JobGurus, Jobberman, JSearch, Indeed RSS, Adzuna, or manual paste |
-| Parsing | `HybridParser` | Tries Gemini LLM first; falls back to `StructuredParser` (regex-based extraction) |
-| Validation | `BaseValidator` (`SchemaValidator`) | Rule checks on LLM output (required fields, salary sanity, parse failure) |
-| Store | `BaseStore` | Persistence — auto-chooses `SupabaseStore` or falls back to `InMemoryStore` |
-| Handoff | `BaseHandoff` | Delivery to downstream — auto-chooses `HTTPHandoff` or falls back to `FileHandoff` |
+| Step | What Happens | Component |
+|------|-------------|-----------|
+| **Fetch** | Pulls raw job postings from 8+ sources (APIs, RSS, scrapers) | `ingestion/` |
+| **Deduplicate** | Skips jobs already seen (by external ID) | `store/` |
+| **AI Parse** | Gemini LLM extracts structured fields (title, company, skills, salary, etc.) — falls back to regex if Gemini is unavailable | `parsing/` |
+| **Validate** | Automated checks: missing fields, salary sanity, confidence thresholds | `validation/` |
+| **Handoff** | POSTs structured data to the matching algorithm (or writes to file in dev) | `handoff/` |
 
-Interfaces defined in [`core/interfaces.py`](core/interfaces.py). Wiring via DI in [`api/dependencies.py`](api/dependencies.py). Orchestration in [`core/pipeline.py`](core/pipeline.py).
+### Job Lifecycle
 
-### Resilience primitives ([`core/resilience.py`](core/resilience.py), [`core/metrics.py`](core/metrics.py))
-- **`CircuitBreaker`** — per-source: skip after N consecutive failures, probe on cooldown expiry
-- **`AdaptiveRateLimiter`** — token bucket that halves on 429s, gradually recovers
-- **`retry_with_backoff`** — exponential backoff + jitter for page-level API calls
-- **`MetricsCollector`** — singleton tracking p50/p95/p99 parse latencies, per-source counts, active runs
+```
+RAW → PARSED → SENT
+                 ↓ (if handoff fails)
+              FAILED → (retry) → SENT
+```
+
+Jobs have 4 possible statuses:
+- **`raw`** — Just fetched, not parsed yet
+- **`parsed`** — AI extraction complete, about to be handed off
+- **`sent`** — Successfully delivered to the matching algorithm
+- **`failed`** — Handoff failed (can be retried via `POST /jobs/retry`)
 
 ---
 
 ## Tech Stack
+
 - **Python 3.11+**
-- **FastAPI** & **Uvicorn**
-- **Pydantic v2**
-- **google-generativeai** (Gemini 2.0 Flash / 2.5 Pro) — optional, falls back to regex parser
-- **HTTPX** (async HTTP)
-- **BeautifulSoup4** (HTML scraping for African job boards)
-- **Supabase** (optional Postgres persistence)
+- **FastAPI** & **Uvicorn** — async web framework
+- **Pydantic v2** — data validation and serialization
+- **Google Gemini** (2.0 Flash / 2.5 Pro) — AI parsing (optional, falls back to regex)
+- **HTTPX** — async HTTP client
+- **BeautifulSoup4** — HTML scraping for African job boards
+- **Supabase** — Postgres persistence (optional, falls back to in-memory)
 
 ---
 
-## Setup
+## Quick Start
 
 ```bash
+# 1. Install dependencies
 pip install -r requirements.txt
-cp .env.example .env   # then fill in credentials
+
+# 2. Copy env template and fill in your credentials
+cp .env.example .env
+
+# 3. Start the dev server
+uvicorn main:app --reload
 ```
 
-### Required env vars
+The server starts at `http://127.0.0.1:8000`. Open `http://127.0.0.1:8000/docs` for the interactive Swagger UI.
+
+### Without any API keys
+
+The pipeline works without Gemini. If `GEMINI_API_KEY` is unset, `StructuredParser` extracts fields via regex. Confidence is lower (0.5–0.7 vs 0.9+ with LLM), but the pipeline keeps running.
+
+---
+
+## Environment Variables
+
+### Required
 
 | Variable | Purpose |
 |----------|---------|
-| `GEMINI_API_KEY` | Google AI Studio API key — optional; without it uses structured parser only |
+| `GEMINI_API_KEY` | Google AI Studio API key — **optional** but strongly recommended; without it, only regex parsing is used |
 
-### Optional but commonly used
+### Commonly Used
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SUPABASE_URL`, `SUPABASE_KEY` | — | When set, uses `SupabaseStore`; otherwise `InMemoryStore` |
-| `HANDOFF_ENDPOINT_URL` | — | When set, posts to downstream via `HTTPHandoff`; otherwise writes `handoff_output.jsonl` |
+| `SUPABASE_URL` | — | When set (with `SUPABASE_KEY`), uses Supabase for persistence |
+| `SUPABASE_KEY` | — | Supabase service role key |
+| `HANDOFF_ENDPOINT_URL` | — | When set, POSTs jobs to this URL; otherwise writes to `handoff_output.jsonl` |
 | `HANDOFF_API_KEY` | — | Bearer token for the handoff endpoint |
 | `HANDOFF_FILE_PATH` | `handoff_output.jsonl` | Output file when endpoint is unset |
 | `JSEARCH_API_KEY` | — | RapidAPI key for JSearch (covers Indeed, LinkedIn, Glassdoor) |
 | `JSEARCH_PAGES` | `10` | Pages per query (10 results/page) |
-| `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | — | Adzuna API credentials (free tier: 250 calls/day) |
+| `ADZUNA_APP_ID` | — | Adzuna API app ID |
+| `ADZUNA_APP_KEY` | — | Adzuna API key (free tier: 250 calls/day) |
 | `ADZUNA_PAGES` | `5` | Pages per query (50 results/page) |
-| `INGEST_QUERIES` | `software engineer,backend developer,python developer` | Comma-separated query list |
-| `INGEST_LOCATIONS` | `remote,United States,Nigeria` | Comma-separated location list |
+
+### Ingestion Settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `INGEST_QUERIES` | `software engineer,backend developer,python developer` | Comma-separated search queries |
+| `INGEST_LOCATIONS` | `remote,United States,Nigeria` | Comma-separated locations |
 | `INGEST_SOURCES` | `workable,myjobmag,fuzu,jobgurus,jobberman` | Comma-separated source list |
 | `TARGET_JOB_COUNT` | `200` | Stop after this many unique jobs |
-| `DATE_POSTED_FILTER` | `week` | `today`, `3days`, `week`, or `month` |
-| `GEMINI_MODEL` | `gemini-2.0-flash` | Falls back to `gemini-2.5-pro` after 3 retries |
-| `GEMINI_FALLBACK_MODEL` | `gemini-2.5-pro` | Model used after retries on primary fail |
-| `AUTO_APPROVE_CONFIDENCE_THRESHOLD` | — | Auto-approve jobs above this confidence (e.g. `0.9`) |
-| `MAX_CONCURRENT_PARSES` | `15` | Semaphore bound for Gemini calls |
-| `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before circuit opens |
+
+### Advanced
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEMINI_MODEL` | `gemini-2.0-flash` | Primary LLM model |
+| `GEMINI_FALLBACK_MODEL` | `gemini-2.5-pro` | Fallback after retries fail |
+| `MAX_CONCURRENT_PARSES` | `15` | Semaphore bound for parallel Gemini calls |
+| `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before circuit opens for a source |
 | `CIRCUIT_BREAKER_COOLDOWN` | `60` | Seconds before half-open probe |
 | `RATE_LIMIT_REQUESTS_PER_MINUTE` | `60` | Max LLM API requests/min |
 
-### Data sources
+---
 
-| Source | Type | Auth needed | Notes |
-|--------|------|-------------|-------|
-| **Workable** | JSON API | None | `jobs.workable.com/api/v1/jobs` — clean rich API, paginated |
-| **MyJobMag** | HTML scrape | None | Nigerian job board — `www.myjobmag.com` |
-| **Fuzu** | HTML scrape | None | African job board — `www.fuzu.com` |
-| **JobGurus** | HTML scrape | None | Nigerian job board — `www.jobgurus.com.ng` |
-| **Jobberman** | HTML scrape | None | Nigerian job board — `www.jobberman.com` |
+## Supported Job Sources
+
+| Source | Type | Auth | Notes |
+|--------|------|------|-------|
+| **Workable** | JSON API | None | `jobs.workable.com/api/v1/jobs` — clean, rich API |
+| **MyJobMag** | HTML scrape | None | Nigerian job board |
+| **Fuzu** | HTML scrape | None | African job board |
+| **JobGurus** | HTML scrape | None | Nigerian job board |
+| **Jobberman** | HTML scrape | None | Nigerian job board |
 | **JSearch API** | REST API | RapidAPI key | Covers Indeed, LinkedIn, Glassdoor |
 | **Indeed RSS** | RSS feed | None | Public RSS, up to 125 jobs/query |
 | **Adzuna API** | REST API | App ID + Key | Free tier: 250 calls/day |
 
 ---
 
+## API Endpoints
+
+Full details with request/response examples: see [API_DOCS.md](API_DOCS.md)
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/ingest/manual` | Submit a single raw job text for processing |
+| `POST` | `/ingest/trigger` | Start a simple single-source ingestion run |
+| `POST` | `/ingest/bulk` | Start a multi-source bulk ingestion (returns `run_id`) |
+| `GET` | `/ingest/runs/{run_id}/status` | Poll progress of a bulk run |
+| `GET` | `/jobs` | List processed jobs (with optional status filter) |
+| `GET` | `/jobs/stats` | Aggregate dashboard statistics |
+| `GET` | `/jobs/{job_id}` | Get a single job by ID |
+| `POST` | `/jobs/retry` | Retry handoff for failed jobs |
+| `GET` | `/metrics` | Pipeline performance metrics |
+| `GET` | `/health` | Liveness check |
+
+---
+
 ## Database Schema (Supabase)
 
-DDL in [`store/stores.py:105-141`](store/stores.py). Required when `SUPABASE_URL` and `SUPABASE_KEY` are set:
+Only needed when `SUPABASE_URL` and `SUPABASE_KEY` are set. Run this SQL in your Supabase project:
 
 ```sql
 CREATE TABLE raw_jobs (
@@ -129,9 +186,6 @@ CREATE TABLE parsed_jobs (
     confidence        FLOAT DEFAULT 1.0,
     parse_warnings    TEXT[] DEFAULT '{}',
     validation_issues TEXT[] DEFAULT '{}',
-    reviewer_notes    TEXT DEFAULT '',
-    reviewed_at       TIMESTAMPTZ,
-    reviewed_by       TEXT,
     parsed_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -140,51 +194,52 @@ CREATE INDEX parsed_jobs_status_idx ON parsed_jobs(status);
 
 ---
 
-## Running
+## Architecture
 
-```bash
-# Dev server
-uvicorn main:app --reload        # → http://127.0.0.1:8000/docs
-
-# Phase 1 manual test (single job → LLM parse → handoff)
-PYTHONPATH=. python scripts/phase1_test.py
-
-# Bulk pipeline test (hermetic dedup, circuit breaker, full flow)
-PYTHONPATH=. python scripts/bulk_test.py
+```
+ScuibJobsAi/
+├── main.py                  # Entry point (uvicorn main:app --reload)
+├── api/
+│   ├── app.py               # FastAPI routes and Swagger configuration
+│   └── dependencies.py      # Dependency injection — swap implementations here
+├── core/
+│   ├── interfaces.py        # Abstract base classes for all pipeline stages
+│   ├── models.py            # Pydantic data models (RawJob, ParsedJob, etc.)
+│   ├── pipeline.py          # Pipeline orchestrator (ingest → parse → validate → handoff)
+│   ├── metrics.py           # In-memory metrics collector
+│   └── resilience.py        # Circuit breaker, rate limiter, retry utilities
+├── ingestion/
+│   ├── ingesters.py         # IndeedRSS, JSearch, Manual ingesters
+│   ├── adzuna_ingester.py   # Adzuna API ingester
+│   ├── custom_ingesters.py  # Workable, MyJobMag, Fuzu, JobGurus, Jobberman
+│   └── aggregator.py        # Multi-source aggregator
+├── parsing/                 # Gemini parser, structured parser, hybrid parser
+├── validation/
+│   └── validators.py        # Automated validation rules
+├── handoff/
+│   └── handlers.py          # HTTP, File, and Mock handoff implementations
+└── store/
+    └── stores.py            # InMemory and Supabase persistence
 ```
 
-**Note:** The pipeline runs without Gemini. If `GEMINI_API_KEY` is unset or rate-limited,
-`StructuredParser` extracts fields via regex (title, company, location, salary, skills).
-Confidence is lower (0.5–0.7 vs 0.9+ with LLM), but the pipeline keeps running.
+### Adding a new job source
 
-### Key API endpoints
+1. Add the source to `JobSource` enum in `core/models.py`
+2. Create a new ingester class extending `BaseIngester` in `ingestion/custom_ingesters.py`
+3. Register it in `build_dynamic_aggregator()` in `api/dependencies.py`
+4. Add any new env vars to `.env.example`
 
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /ingest/manual` | Paste raw text for parse + stage |
-| `POST /ingest/bulk` | Multi-source background ingestion (returns `run_id`) |
-| `GET /ingest/runs/{run_id}/status` | Poll progress of a bulk run |
-| `GET /jobs/pending` | Jobs awaiting human review |
-| `GET /jobs/stats` | Aggregate dashboard stats |
-| `POST /jobs/{id}/approve` | Approve and handoff a single job |
-| `POST /jobs/{id}/reject` | Reject a single job |
-| `POST /jobs/bulk-action` | Approve/reject filtered by ID, confidence, or flagged status |
-| `GET /metrics` | Pipeline metrics snapshot |
-| `GET /health` | Liveness check |
+### Parser fallback chain
+
+1. `HybridParser` tries `GeminiParser` (LLM) first
+2. If Gemini fails → falls back to `StructuredParser` (regex)
+3. For Workable sources, `StructuredParser` uses API metadata fields directly (more accurate)
 
 ---
 
-## Rollout
+## Known Limitations
 
-| Phase | What | Status |
-|-------|------|--------|
-| 1 | Manual paste → LLM parse → mock handoff (POC validation) | Done |
-| 2 | Supabase persistence, Indeed RSS + Adzuna, HTTP handoff, human review UI endpoints | Done |
-| 3 | Multi-source concurrent ingestion, chunked parallel LLM parsing, circuit breakers, rate limiters, metrics, bulk API | Done |
-| 4 | Custom ingesters for Workable, MyJobMag, Fuzu, JobGurus, Jobberman + fallback structured parser so pipeline works without Gemini | Done |
-
-### Known limitations
-- **Gemini API key** needs billing enabled for production volume (free tier quota exhausted quickly)
-- **Wellfound** (angel.co) behind Cloudflare — cannot scrape with plain HTTP
-- **Nigerian sites** (JobGurus, Jobberman, Fuzu) — HTML scraping may need Browser-like headers or proxies
+- **Gemini API** needs billing enabled for production volume (free tier quota exhausts quickly)
+- **Wellfound** (angel.co) is behind Cloudflare — cannot scrape with plain HTTP
+- **Nigerian sites** (JobGurus, Jobberman, Fuzu) — HTML scraping may need browser-like headers or proxies
 - **Workable API** rate limits unknown — conservative 30 RPM configured

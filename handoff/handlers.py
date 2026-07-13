@@ -2,8 +2,9 @@
 handoff/handlers.py
 
 Concrete BaseHandoff implementations.
-HTTPHandoff: POST to Dozie's algorithm endpoint.
-MockHandoff: for testing / Phase 1 dry runs.
+HTTPHandoff: POST to downstream matching algorithm endpoint.
+MockHandoff: for testing / dry runs.
+FileHandoff: local file output for dev/staging.
 """
 
 import json
@@ -12,14 +13,14 @@ from datetime import datetime
 import httpx
 
 from core.interfaces import BaseHandoff
-from core.models import ValidatedJob, HandoffPayload
+from core.models import ParsedJob, HandoffPayload
 
 logger = logging.getLogger(__name__)
 
 
 class HTTPHandoff(BaseHandoff):
     """
-    POSTs the validated job payload to Dozie's algorithm endpoint.
+    POSTs the parsed job payload to the downstream matching algorithm endpoint.
     Handles retries and auth headers.
     """
 
@@ -37,8 +38,8 @@ class HTTPHandoff(BaseHandoff):
         if api_key:
             self._headers["Authorization"] = f"Bearer {api_key}"
 
-    async def send(self, job: ValidatedJob) -> HandoffPayload:
-        payload = HandoffPayload.from_validated(job)
+    async def send(self, job: ParsedJob) -> HandoffPayload:
+        payload = HandoffPayload.from_parsed(job)
         body = payload.model_dump(mode="json")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -75,15 +76,15 @@ class HTTPHandoff(BaseHandoff):
 
 class MockHandoff(BaseHandoff):
     """
-    Phase 1 / testing handoff. Logs the payload instead of sending it.
+    Testing handoff. Logs the payload instead of sending it.
     Stores sent jobs in memory for test assertions.
     """
 
     def __init__(self):
         self.sent_jobs: list[HandoffPayload] = []
 
-    async def send(self, job: ValidatedJob) -> HandoffPayload:
-        payload = HandoffPayload.from_validated(job)
+    async def send(self, job: ParsedJob) -> HandoffPayload:
+        payload = HandoffPayload.from_parsed(job)
         self.sent_jobs.append(payload)
         logger.info(f"[MockHandoff] Would send job: {payload.model_dump_json(indent=2)}")
         return payload
@@ -95,14 +96,14 @@ class MockHandoff(BaseHandoff):
 class FileHandoff(BaseHandoff):
     """
     Writes payloads as JSON lines to a file.
-    Useful for local dev, batch exports, or when Dozie's endpoint isn't ready.
+    Useful for local dev, batch exports, or when downstream endpoint isn't ready.
     """
 
     def __init__(self, output_path: str):
         self.output_path = output_path
 
-    async def send(self, job: ValidatedJob) -> HandoffPayload:
-        payload = HandoffPayload.from_validated(job)
+    async def send(self, job: ParsedJob) -> HandoffPayload:
+        payload = HandoffPayload.from_parsed(job)
         with open(self.output_path, "a") as f:
             f.write(payload.model_dump_json() + "\n")
         logger.info(f"[FileHandoff] Wrote job {payload.job_id} to {self.output_path}")

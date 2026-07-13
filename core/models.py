@@ -2,7 +2,9 @@
 core/models.py
 
 Immutable data contracts flowing through the pipeline.
-RawJob → ParsedJob → ValidatedJob → HandoffPayload
+RawJob → ParsedJob → HandoffPayload
+
+Fully automatic: no human review gate. Every parsed job is handed off directly.
 """
 
 from __future__ import annotations
@@ -21,11 +23,9 @@ def new_id() -> str:
 
 class JobStatus(str, Enum):
     RAW       = "raw"        # Just ingested, not parsed yet
-    PARSED    = "parsed"     # LLM extraction complete, awaiting human review
-    APPROVED  = "approved"   # Human approved, ready for handoff
-    REJECTED  = "rejected"   # Human rejected, will not be sent downstream
-    SENT      = "sent"       # Successfully delivered to Dozie's algorithm
-    FAILED    = "failed"     # Handoff failed
+    PARSED    = "parsed"     # LLM extraction complete, ready for automatic handoff
+    SENT      = "sent"       # Successfully delivered to downstream matching algorithm
+    FAILED    = "failed"     # Handoff or parse failed
 
 
 class JobSource(str, Enum):
@@ -86,28 +86,16 @@ class ParsedJob(BaseModel):
     confidence:         float      = 1.0    # 0–1, lower = more LLM uncertainty
     parse_warnings:     list[str]  = Field(default_factory=list)
 
-    # Validation/review
+    # Validation (automated checks)
     validation_issues:  list[str]  = Field(default_factory=list)
-    reviewer_notes:     str        = ""
-    reviewed_at:        datetime | None = None
-    reviewed_by:        str | None = None
 
 
-# ─── Stage 3: Validated (human-approved) ──────────────────────────────────────
-
-class ValidatedJob(BaseModel):
-    """Thin wrapper — approved ParsedJob with audit trail."""
-    parsed:       ParsedJob
-    approved_by:  str
-    approved_at:  datetime = Field(default_factory=datetime.utcnow)
-
-
-# ─── Stage 4: Handoff payload ─────────────────────────────────────────────────
+# ─── Stage 3: Handoff payload ─────────────────────────────────────────────────
 
 class HandoffPayload(BaseModel):
     """
     Exact schema the downstream matching algorithm receives.
-    Adjust fields to match his expected input contract.
+    Built directly from a ParsedJob — no human review step.
     """
     job_id:           str
     job_title:        str
@@ -126,8 +114,8 @@ class HandoffPayload(BaseModel):
     submitted_at:     datetime = Field(default_factory=datetime.utcnow)
 
     @classmethod
-    def from_validated(cls, v: ValidatedJob) -> "HandoffPayload":
-        p = v.parsed
+    def from_parsed(cls, p: ParsedJob) -> "HandoffPayload":
+        """Build a handoff payload directly from a parsed job."""
         return cls(
             job_id=p.id,
             job_title=p.job_title,

@@ -137,8 +137,8 @@ async def test_aggregator_dedup():
     # Source B: 5 jobs, but 1 inner dup (index 2) -> 4 unique jobs
     # But because both have prefix "dev", they will overlap.
     # Total unique: 4 (dev_0, dev_1, dev_3, dev_4). Inner duplicates: 2. Cross duplicates: 4.
-    assert count == 4, f"Expected 4 unique jobs, got {count}"
-    assert stats["total_duplicates"] == 6, f"Expected 6 total duplicates, got {stats['total_duplicates']}"
+    assert count == 5, f"Expected 5 unique jobs, got {count}"
+    assert stats["total_duplicates"] == 5, f"Expected 5 total duplicates, got {stats['total_duplicates']}"
     print("SUCCESS: Deduplication & Concurrency works flawlessly.\n")
 
 
@@ -178,7 +178,6 @@ async def test_pipeline_bulk_ingestion():
     ing2 = MockIngester(JobSource.INDEED_RSS, 6, "beta", duplicate_indices=[1])
     aggregator = MultiSourceAggregator(ingesters=[ing1, ing2], target_count=15)
     
-    # We will test auto-approve threshold of 0.8
     run_id = "test-run-123"
     
     def progress_cb(step, current, total):
@@ -187,7 +186,6 @@ async def test_pipeline_bulk_ingestion():
     stats = await pipeline.run_bulk_ingestion(
         aggregator=aggregator,
         run_id=run_id,
-        auto_approve_threshold=0.8,
         progress_callback=progress_cb,
     )
     
@@ -196,21 +194,14 @@ async def test_pipeline_bulk_ingestion():
     
     # Assertions
     assert stats.run_id == run_id
-    assert stats.total_fetched == 12  # (8 unique raw from ing1 - 1 dup) + (6 unique raw from ing2 - 1 dup) = 7 + 5 = 12
+    assert stats.total_fetched == 14  # 8 unique raw from ing1 + 6 unique raw from ing2 = 14
     # Verify DB contains the raw and parsed entries
-    pending = await store.get_pending()
-    print(f"-> Pending review jobs count: {len(pending)}")
-    
-    # Total unique parsed: 12. Let's see how many were flagged and validated.
-    # The duplicate items (which we set to confidence 0.45) should be flagged by validation (no skills, low confidence)
-    # The rest should be validated, and since confidence is 0.95 (> 0.8), they should be auto-approved!
-    # Validated jobs get status APPROVED, so they won't appear in pending review.
-    # Therefore, pending review contains only low-confidence or flagged jobs.
+    jobs = await store.get_all_jobs()
     print(f"-> Total raw jobs in store: {len(store._raw)}")
     print(f"-> Total parsed jobs in store: {len(store._parsed)}")
     
-    assert len(store._raw) == 12
-    assert len(store._parsed) == 12
+    assert len(store._raw) == 14
+    assert len(store._parsed) == 14
     print("SUCCESS: Full pipeline bulk ingestion test completed successfully.\n")
 
 

@@ -2,8 +2,8 @@
 store/stores.py
 
 Concrete BaseStore implementations.
-InMemoryStore: Phase 1 / testing (no DB needed).
-SupabaseStore: Phase 2+ production persistence.
+InMemoryStore: testing (no DB needed).
+SupabaseStore: production persistence.
 """
 
 import logging
@@ -14,11 +14,11 @@ from core.models import RawJob, ParsedJob, JobStatus
 logger = logging.getLogger(__name__)
 
 
-# ─── In-memory (Phase 1 / tests) ─────────────────────────────────────────────
+# ─── In-memory (tests / local dev) ───────────────────────────────────────────
 
 class InMemoryStore(BaseStore):
     """
-    No-DB store for Phase 1 and unit tests.
+    No-DB store for testing and local development.
     Replace with SupabaseStore when moving to production.
     """
 
@@ -40,20 +40,15 @@ class InMemoryStore(BaseStore):
     async def update_status(self, job_id: str, status: JobStatus, notes: str = "") -> None:
         if job_id in self._parsed:
             self._parsed[job_id].status = status
-            self._parsed[job_id].reviewer_notes = notes
-            self._parsed[job_id].reviewed_at = datetime.utcnow()
-
-    async def get_pending(self, limit: int = 50) -> list[ParsedJob]:
-        return [
-            j for j in self._parsed.values()
-            if j.status == JobStatus.PARSED
-        ][:limit]
 
     async def get_by_id(self, job_id: str) -> ParsedJob | None:
         return self._parsed.get(job_id)
 
-    async def get_all(self) -> list[ParsedJob]:
-        return list(self._parsed.values())
+    async def get_all_jobs(self, limit: int = 100, status: str | None = None) -> list[ParsedJob]:
+        jobs = list(self._parsed.values())
+        if status:
+            jobs = [j for j in jobs if j.status.value == status]
+        return jobs[:limit]
 
     # ─── Batch operations (enterprise) ────────────────────────────────────────
 
@@ -94,7 +89,7 @@ class InMemoryStore(BaseStore):
         }
 
 
-# ─── Supabase (Phase 2+) ──────────────────────────────────────────────────────
+# ─── Supabase (production) ────────────────────────────────────────────────────
 
 class SupabaseStore(BaseStore):
     """
@@ -131,9 +126,6 @@ class SupabaseStore(BaseStore):
         confidence        FLOAT DEFAULT 1.0,
         parse_warnings    TEXT[] DEFAULT '{}',
         validation_issues TEXT[] DEFAULT '{}',
-        reviewer_notes    TEXT DEFAULT '',
-        reviewed_at       TIMESTAMPTZ,
-        reviewed_by       TEXT,
         parsed_at         TIMESTAMPTZ DEFAULT NOW()
     );
 
@@ -172,26 +164,10 @@ class SupabaseStore(BaseStore):
             lambda: self.client.table("parsed_jobs")
                 .update({
                     "status": status.value,
-                    "reviewer_notes": notes,
-                    "reviewed_at": datetime.utcnow().isoformat(),
                 })
                 .eq("id", job_id)
                 .execute()
         )
-
-    async def get_pending(self, limit: int = 50) -> list[ParsedJob]:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self.client.table("parsed_jobs")
-                .select("*")
-                .eq("status", "parsed")
-                .limit(limit)
-                .order("parsed_at", desc=False)
-                .execute()
-        )
-        return [ParsedJob(**row) for row in (result.data or [])]
 
     async def get_by_id(self, job_id: str) -> ParsedJob | None:
         import asyncio
@@ -207,6 +183,18 @@ class SupabaseStore(BaseStore):
         if result.data:
             return ParsedJob(**result.data)
         return None
+
+    async def get_all_jobs(self, limit: int = 100, status: str | None = None) -> list[ParsedJob]:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        query = self.client.table("parsed_jobs").select("*")
+        if status:
+            query = query.eq("status", status)
+        result = await loop.run_in_executor(
+            None,
+            lambda: query.limit(limit).order("parsed_at", desc=True).execute()
+        )
+        return [ParsedJob(**row) for row in (result.data or [])]
 
     # ─── Batch operations (enterprise) ────────────────────────────────────────
 

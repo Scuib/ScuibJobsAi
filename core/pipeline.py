@@ -2,16 +2,15 @@
 core/pipeline.py
 
 Orchestrates the full flow: ingest → parse → validate → handoff.
-No human-in-the-loop — every parsed job is automatically handed off to the
-downstream matching algorithm. Manual approve/reject endpoints still available
-for retrying failed jobs or flagging unwanted ones.
+Fully automatic — every parsed job is immediately handed off to the
+downstream matching algorithm. No human review step.
 """
 
 import asyncio
 import logging
 from datetime import datetime
 from core.interfaces import BaseIngester, BaseParser, BaseValidator, BaseHandoff, BaseStore
-from core.models import RawJob, ParsedJob, ValidatedJob, JobStatus, PipelineResult, IngestionStats
+from core.models import RawJob, ParsedJob, HandoffPayload, JobStatus, PipelineResult, IngestionStats
 from core.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
@@ -22,8 +21,7 @@ class JobPipeline:
     Wires together the four pipeline stages.
     All dependencies are injected — swap any stage independently.
 
-    No human-in-the-loop: every job goes ingest → parse → validate → handoff.
-    approve_and_send / reject are available for manual retry of failed jobs.
+    Fully automatic: every job flows ingest → parse → validate → handoff.
     """
 
     def __init__(
@@ -77,14 +75,11 @@ class JobPipeline:
                 parsed = await self.parser.parse(raw)
                 is_valid, issues = await self.validator.validate(parsed)
                 parsed.validation_issues = issues
-                parsed.reviewed_by = "system"
-                parsed.reviewed_at = datetime.utcnow()
 
                 await self.store.save_parsed(parsed)
 
-                validated = ValidatedJob(parsed=parsed, approved_by="system")
                 try:
-                    await self.handoff.send(validated)
+                    await self.handoff.send(parsed)
                     await self.store.update_status(parsed.id, JobStatus.SENT, "Auto-handoff")
                     return PipelineResult(
                         success=True,
@@ -107,47 +102,28 @@ class JobPipeline:
                 logger.error(f"Parse failed for raw {raw.id}: {e}")
                 return PipelineResult(success=False, message=str(e))
 
-    # ─── Manual override endpoints (retry failed jobs) ─────────────────────────
+    # ─── Retry failed handoff ──────────────────────────────────────────────────
 
-    async def approve_and_send(
-        self,
-        job_id: str,
-        reviewer: str,
-        notes: str = "",
-    ) -> PipelineResult:
-        """Retry handoff for a failed job."""
+    async def retry_handoff(self, job_id: str) -> PipelineResult:
+        """Retry handoff for a job that previously failed."""
         parsed = await self.store.get_by_id(job_id)
         if not parsed:
             return PipelineResult(success=False, message=f"Job {job_id} not found")
 
-        if parsed.status not in (JobStatus.PARSED, JobStatus.FAILED):
+        if parsed.status != JobStatus.FAILED:
             return PipelineResult(
                 success=False,
-                message=f"Job {job_id} is in status {parsed.status}, cannot approve",
+                message=f"Job {job_id} is in status {parsed.status}, only failed jobs can be retried",
             )
 
-        validated = ValidatedJob(parsed=parsed, approved_by=reviewer)
         try:
-            await self.handoff.send(validated)
-            await self.store.update_status(job_id, JobStatus.SENT, notes)
+            await self.handoff.send(parsed)
+            await self.store.update_status(job_id, JobStatus.SENT, "Retry handoff succeeded")
             return PipelineResult(success=True, job_id=job_id, status=JobStatus.SENT)
         except Exception as e:
             await self.store.update_status(job_id, JobStatus.FAILED, str(e))
             logger.error(f"Handoff retry failed for {job_id}: {e}")
             return PipelineResult(success=False, job_id=job_id, message=str(e))
-
-    async def reject(self, job_id: str, reviewer: str, reason: str) -> PipelineResult:
-        """Manually mark a job as rejected (won't be sent downstream)."""
-        parsed = await self.store.get_by_id(job_id)
-        if not parsed:
-            return PipelineResult(success=False, message=f"Job {job_id} not found")
-
-        await self.store.update_status(job_id, JobStatus.REJECTED, reason)
-        return PipelineResult(success=True, job_id=job_id, status=JobStatus.REJECTED)
-
-    async def send_approved_batch(self, job_ids: list[str], reviewer: str) -> list[PipelineResult]:
-        tasks = [self.approve_and_send(jid, reviewer) for jid in job_ids]
-        return await asyncio.gather(*tasks, return_exceptions=False)
 
     # ─── Bulk Ingestion ───────────────────────────────────────────────────────
 
@@ -231,8 +207,6 @@ class JobPipeline:
             sent_count = 0
             for i, (job, (is_valid, issues)) in enumerate(zip(parsed_jobs, validation_results)):
                 job.validation_issues = issues
-                job.reviewed_by = "system"
-                job.reviewed_at = datetime.utcnow()
 
                 if "[PARSE FAILED]" in job.job_title:
                     run.errors += 1
@@ -252,8 +226,7 @@ class JobPipeline:
 
             for i, job in enumerate(parsed_jobs):
                 try:
-                    validated = ValidatedJob(parsed=job, approved_by="system")
-                    await self.handoff.send(validated)
+                    await self.handoff.send(job)
                     await self.store.update_status(job.id, JobStatus.SENT, "Bulk auto-handoff")
                     sent_count += 1
                 except Exception as e:
@@ -288,4 +261,3 @@ class JobPipeline:
             duration_seconds=run.duration_seconds,
             jobs_per_second=run.jobs_per_second,
         )
-

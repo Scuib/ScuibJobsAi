@@ -1,8 +1,9 @@
 """
 validation/validators.py
 
-Programmatic rule engine that runs BEFORE human review.
+Automated rule engine for parsed jobs.
 Flags structural/logical issues — doesn't block jobs, just annotates them.
+All issues are informational and flow through the pipeline automatically.
 """
 
 from core.interfaces import BaseValidator
@@ -12,7 +13,7 @@ from core.models import ParsedJob
 class SchemaValidator(BaseValidator):
     """
     Validates a ParsedJob against business rules.
-    Returns (is_valid, issues) — issues are surfaced in the admin panel diff view.
+    Returns (is_valid, issues) — issues are logged as annotations on the job.
 
     Extend by subclassing and overriding `_rules()`.
     """

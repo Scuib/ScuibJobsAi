@@ -2,7 +2,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -23,6 +23,36 @@ from api.dependencies import get_pipeline, get_store, build_dynamic_aggregator
 logger = logging.getLogger(__name__)
 
 
+# ─── Swagger tag metadata ────────────────────────────────────────────────────
+
+tags_metadata = [
+    {
+        "name": "Ingestion",
+        "description": (
+            "Start job ingestion runs. These endpoints fetch raw job postings from "
+            "external sources (Workable, MyJobMag, Fuzu, JSearch, Adzuna, etc.), "
+            "parse them with AI, validate them, and automatically send them to the "
+            "downstream matching algorithm. No human approval is needed."
+        ),
+    },
+    {
+        "name": "Jobs",
+        "description": (
+            "Read-only endpoints for browsing and monitoring jobs that have been "
+            "processed by the pipeline. Use these to build dashboards and "
+            "monitoring views in the frontend panel."
+        ),
+    },
+    {
+        "name": "System",
+        "description": (
+            "Health checks and pipeline performance metrics. Use `/health` for "
+            "liveness probes and `/metrics` for observability dashboards."
+        ),
+    },
+]
+
+
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -40,10 +70,27 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Job Pipeline API",
-    description="Automated job ingestion → LLM parsing → human validation → handoff",
-    version="1.0.0",
+    title="ScuibJobsAi Pipeline API",
+    description=(
+        "**Fully automated** job data pipeline that ingests job listings from multiple "
+        "sources (Workable, MyJobMag, Fuzu, JobGurus, Jobberman, JSearch, Indeed RSS, "
+        "Adzuna), parses them using Google Gemini AI (with regex fallback), validates "
+        "the extracted data, and automatically hands off every job to the downstream "
+        "matching algorithm.\n\n"
+        "### How it works\n"
+        "1. **Ingest** — Fetches raw job postings from configured sources\n"
+        "2. **Parse** — Extracts structured fields (title, company, skills, salary, etc.) using Gemini LLM\n"
+        "3. **Validate** — Runs automated quality checks (missing fields, salary sanity, etc.)\n"
+        "4. **Handoff** — Sends the structured job data to the matching algorithm automatically\n\n"
+        "### Key points\n"
+        "- **No human approval needed** — the entire pipeline runs end-to-end automatically\n"
+        "- **Background processing** — bulk ingestion runs asynchronously; poll for progress\n"
+        "- **Multi-source** — fetches from 8+ job boards in a single run\n"
+        "- **Resilient** — circuit breakers, rate limiters, and automatic retries built-in"
+    ),
+    version="2.0.0",
     lifespan=lifespan,
+    openapi_tags=tags_metadata,
 )
 
 app.add_middleware(
@@ -54,49 +101,72 @@ app.add_middleware(
 )
 
 
-# ─── Request/Response schemas ─────────────────────────────────────────────────
+# ─── Request schemas ──────────────────────────────────────────────────────────
 
 class ManualIngestRequest(BaseModel):
-    raw_text: str
-    source_url: str | None = None
-
-
-class ReviewDecision(BaseModel):
-    reviewer: str
-    notes: str = ""
-
-
-class BulkApproveRequest(BaseModel):
-    job_ids: list[str]
-    reviewer: str
+    """Payload for manually submitting a single raw job posting for processing."""
+    raw_text: str = Field(
+        ...,
+        description="The full raw text of the job posting (can include HTML or plain text).",
+        json_schema_extra={"example": "Senior Backend Engineer - Remote\nTechCorp Inc | $140k-$180k\nPython, Go, PostgreSQL, 5+ years experience required."},
+    )
+    source_url: str | None = Field(
+        default=None,
+        description="Optional URL where the job was originally posted. Used for reference only.",
+        json_schema_extra={"example": "https://example.com/jobs/senior-backend-eng"},
+    )
 
 
 class TriggerIngestionRequest(BaseModel):
-    source: JobSource = JobSource.INDEED_RSS
-    query: str = "software engineer"
-    location: str = "remote"
+    """Payload for triggering a simple single-source ingestion run."""
+    source: JobSource = Field(
+        default=JobSource.INDEED_RSS,
+        description="Which job source to fetch from. Defaults to Indeed RSS.",
+    )
+    query: str = Field(
+        default="software engineer",
+        description="Search query to use when fetching jobs.",
+    )
+    location: str = Field(
+        default="remote",
+        description="Location filter for the job search.",
+    )
 
 
-class BulkActionRequest(BaseModel):
-    action: str = Field(..., description="approve | reject")
-    reviewer: str
-    reason: str = ""
-    # Filters
-    confidence_min: float | None = None
-    exclude_flagged: bool = False
-    job_ids: list[str] | None = None
+class RetryHandoffRequest(BaseModel):
+    """Payload for retrying the handoff of a failed job."""
+    job_ids: list[str] = Field(
+        ...,
+        description="List of job IDs (UUIDs) to retry handoff for. Only jobs with 'failed' status can be retried.",
+        json_schema_extra={"example": ["550e8400-e29b-41d4-a716-446655440000"]},
+    )
 
 
 # ─── Phase 1: Ingestion endpoints ─────────────────────────────────────────────
 
-@app.post("/ingest/manual", response_model=PipelineResult, tags=["Ingestion"])
+@app.post(
+    "/ingest/manual",
+    response_model=PipelineResult,
+    tags=["Ingestion"],
+    summary="Manually submit a single job for processing",
+    response_description="The result of the pipeline run, including the new job's ID and its final status (usually 'sent').",
+)
 async def ingest_manual(
     body: ManualIngestRequest,
     pipeline: JobPipeline = Depends(get_pipeline),
 ):
     """
-    Phase 1: Paste raw job text directly. Triggers LLM parse + staging.
-    No scraper needed — for POC validation.
+    Submit a raw job posting directly as text. The pipeline will:
+
+    1. **Parse** the text using AI (Gemini LLM) to extract structured fields like
+       job title, company, location, salary, required skills, etc.
+    2. **Validate** the extracted data against quality rules.
+    3. **Hand off** the structured job to the downstream matching algorithm.
+
+    This endpoint is useful for testing, one-off jobs, or when you have job text
+    that didn't come from a supported source.
+
+    **No human approval is needed** — the job is processed end-to-end automatically.
     """
     raw = RawJob(
         source=JobSource.MANUAL,
@@ -106,15 +176,25 @@ async def ingest_manual(
     return await pipeline.ingest_single(raw)
 
 
-@app.post("/ingest/trigger", response_model=dict, tags=["Ingestion"])
+@app.post(
+    "/ingest/trigger",
+    response_model=dict,
+    tags=["Ingestion"],
+    summary="Start a simple single-source ingestion run",
+    response_description="Confirmation that the ingestion run has started in the background.",
+)
 async def trigger_ingestion(
     body: TriggerIngestionRequest,
     background_tasks: BackgroundTasks,
     pipeline: JobPipeline = Depends(get_pipeline),
 ):
     """
-    Phase 2: Kick off a full ingestion cycle in the background.
-    Returns immediately — check /jobs?status=parsed to see results.
+    Kicks off an ingestion cycle from a single source in the background.
+    The server responds immediately — jobs will be fetched, parsed, validated,
+    and handed off automatically.
+
+    Use `GET /jobs/stats` to see updated counts after the run completes.
+    For multi-source ingestion with more control, use `POST /ingest/bulk` instead.
     """
     background_tasks.add_task(pipeline.run_ingestion_cycle)
     return {"message": "Ingestion cycle started in background", "source": body.source}
@@ -152,16 +232,34 @@ async def run_bulk_ingestion_background(
         logger.error(f"Bulk ingestion background task {run_id} failed: {e}", exc_info=True)
 
 
-@app.post("/ingest/bulk", response_model=dict, tags=["Ingestion"])
+@app.post(
+    "/ingest/bulk",
+    response_model=dict,
+    tags=["Ingestion"],
+    summary="Start a multi-source bulk ingestion run",
+    response_description="A `run_id` you can use to poll for progress via `GET /ingest/runs/{run_id}/status`.",
+)
 async def trigger_bulk_ingestion(
     body: BulkIngestionRequest,
     background_tasks: BackgroundTasks,
     pipeline: JobPipeline = Depends(get_pipeline),
 ):
     """
-    Kicks off a multi-source ingestion run in the background.
-    All jobs are automatically parsed and handed off — no human review needed.
-    Returns a run_id immediately to poll for progress.
+    **The main way to fetch jobs.** Kicks off a multi-source ingestion run that:
+
+    1. Fetches raw job postings from the specified sources (Workable, MyJobMag, Fuzu, etc.)
+    2. Deduplicates against previously seen jobs
+    3. Parses all new jobs using AI (Gemini LLM with regex fallback)
+    4. Validates extracted data quality
+    5. Hands off every job to the downstream matching algorithm
+
+    **This runs entirely in the background.** The endpoint returns immediately with a
+    `run_id` that you can poll with `GET /ingest/runs/{run_id}/status` to track progress.
+
+    All jobs are processed automatically — no human approval step.
+
+    **Available sources:** `workable`, `myjobmag`, `fuzu`, `jobgurus`, `jobberman`,
+    `jsearch_api`, `indeed_rss`, `adzuna_api`
     """
     run_id = str(uuid.uuid4())
 
@@ -183,9 +281,31 @@ async def trigger_bulk_ingestion(
     }
 
 
-@app.get("/ingest/runs/{run_id}/status", response_model=IngestionRunStatus, tags=["Ingestion"])
-async def get_run_status(run_id: str):
-    """Poll progress and metrics for a specific bulk ingestion run."""
+@app.get(
+    "/ingest/runs/{run_id}/status",
+    response_model=IngestionRunStatus,
+    tags=["Ingestion"],
+    summary="Check the progress of a bulk ingestion run",
+    response_description="Current status and counters for the specified ingestion run.",
+)
+async def get_run_status(
+    run_id: str = Query(..., description="The UUID returned by `POST /ingest/bulk`"),
+):
+    """
+    Poll progress of a running or recently completed bulk ingestion run.
+
+    **Recommended polling interval:** every 3–5 seconds.
+
+    The response includes:
+    - `state` — either `running`, `completed`, or `failed`
+    - `fetched` — how many raw jobs have been fetched so far
+    - `parsed` — how many have been successfully parsed by AI
+    - `errors` — how many jobs failed during parsing or handoff
+    - `duplicates` — how many were skipped as duplicates
+    - `per_source` — breakdown of job counts by source
+
+    Returns `404` if the run ID is not found (expired from memory or never existed).
+    """
     collector = get_metrics_collector()
     run = collector.get_run(run_id)
     
@@ -222,120 +342,137 @@ async def get_run_status(run_id: str):
     )
 
 
-# ─── Phase 2: Review queue endpoints ──────────────────────────────────────────
+# ─── Jobs: Read-only monitoring endpoints ─────────────────────────────────────
 
-@app.get("/jobs/stats", tags=["Dashboard"])
+@app.get(
+    "/jobs/stats",
+    tags=["Jobs"],
+    summary="Get aggregate dashboard statistics",
+    response_description="Aggregate counts broken down by status, source, and average confidence.",
+)
 async def get_jobs_stats(store=Depends(get_store)):
-    """Get aggregate statistics across all jobs (parsed, pending, sent, etc.)."""
+    """
+    Returns aggregate statistics across all jobs in the system. Useful for building
+    dashboard summary cards.
+
+    **Response includes:**
+    - `total_raw` — total number of raw (unprocessed) job postings fetched
+    - `total_parsed` — total jobs that have been through the AI parser
+    - `avg_confidence` — average AI confidence score (0.0–1.0) across all parsed jobs
+    - `by_status` — count of jobs in each status: `raw`, `parsed`, `sent`, `failed`
+    - `by_source` — count of jobs per source (e.g., `workable: 150`, `myjobmag: 80`)
+    """
     return await store.get_stats()
 
 
-@app.get("/jobs/pending", response_model=list[ParsedJob], tags=["Review"])
-async def get_pending_jobs(
-    limit: int = 50,
+@app.get(
+    "/jobs/{job_id}",
+    response_model=ParsedJob,
+    tags=["Jobs"],
+    summary="Get a single job by ID",
+    response_description="The full parsed job object with all extracted fields.",
+)
+async def get_job(
+    job_id: str = Query(..., description="The UUID of the job to fetch"),
     store=Depends(get_store),
 ):
-    """Fetch all jobs awaiting human review."""
-    return await store.get_pending(limit=limit)
+    """
+    Fetch a specific parsed job by its UUID. Returns the full job object including:
 
+    - Extracted fields (title, company, location, salary, skills, etc.)
+    - AI parsing metadata (model used, confidence score, parse warnings)
+    - Validation issues (if any automated checks flagged problems)
+    - Current status (`parsed`, `sent`, or `failed`)
 
-@app.get("/jobs/{job_id}", response_model=ParsedJob, tags=["Review"])
-async def get_job(job_id: str, store=Depends(get_store)):
-    """Fetch a specific job by ID."""
+    Returns `404` if the job ID doesn't exist.
+    """
     job = await store.get_by_id(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
 
 
-@app.post("/jobs/{job_id}/approve", response_model=PipelineResult, tags=["Review"])
-async def approve_job(
-    job_id: str,
-    body: ReviewDecision,
-    pipeline: JobPipeline = Depends(get_pipeline),
-):
-    """
-    Human approves a parsed job → sends to Dozie's algorithm.
-    This is the critical human-in-the-loop gate.
-    """
-    result = await pipeline.approve_and_send(
-        job_id=job_id,
-        reviewer=body.reviewer,
-        notes=body.notes,
-    )
-    if not result.success:
-        raise HTTPException(status_code=400, detail=result.message)
-    return result
-
-
-@app.post("/jobs/{job_id}/reject", response_model=PipelineResult, tags=["Review"])
-async def reject_job(
-    job_id: str,
-    body: ReviewDecision,
-    pipeline: JobPipeline = Depends(get_pipeline),
-):
-    """Human rejects a parsed job — will not be forwarded downstream."""
-    result = await pipeline.reject(
-        job_id=job_id,
-        reviewer=body.reviewer,
-        reason=body.notes,
-    )
-    if not result.success:
-        raise HTTPException(status_code=400, detail=result.message)
-    return result
-
-
-@app.post("/jobs/bulk-approve", response_model=list[PipelineResult], tags=["Review"])
-async def bulk_approve(
-    body: BulkApproveRequest,
-    pipeline: JobPipeline = Depends(get_pipeline),
-):
-    """Approve and send multiple jobs in one call."""
-    return await pipeline.send_approved_batch(body.job_ids, body.reviewer)
-
-
-@app.post("/jobs/bulk-action", response_model=list[PipelineResult], tags=["Review"])
-async def bulk_action(
-    body: BulkActionRequest,
-    pipeline: JobPipeline = Depends(get_pipeline),
+@app.get(
+    "/jobs",
+    response_model=list[ParsedJob],
+    tags=["Jobs"],
+    summary="List all processed jobs",
+    response_description="A list of parsed job objects, optionally filtered by status.",
+)
+async def list_jobs(
+    limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of jobs to return (1–1000)."),
+    status: str | None = Query(default=None, description="Filter by job status. Valid values: `parsed`, `sent`, `failed`. Leave empty for all jobs."),
     store=Depends(get_store),
 ):
     """
-    Bulk approve or reject jobs, with optional filters such as minimum confidence
-    or specific job IDs.
+    Fetch a list of jobs that have been processed by the pipeline.
+    Supports optional filtering by status.
+
+    **Status values:**
+    - `parsed` — AI extraction complete, waiting for handoff
+    - `sent` — successfully delivered to the matching algorithm
+    - `failed` — handoff or parsing failed (can be retried with `POST /jobs/retry`)
+
+    Jobs are returned newest-first. Use `limit` to control page size.
     """
-    if body.job_ids is not None:
-        target_ids = body.job_ids
-    else:
-        pending = await store.get_pending(limit=1000)
-        target_ids = []
-        for job in pending:
-            if body.confidence_min is not None and job.confidence < body.confidence_min:
-                continue
-            if body.exclude_flagged and job.validation_issues:
-                continue
-            target_ids.append(job.id)
-
-    if not target_ids:
-        return []
-
-    if body.action == "approve":
-        return await pipeline.send_approved_batch(target_ids, body.reviewer)
-    elif body.action == "reject":
-        tasks = [pipeline.reject(jid, body.reviewer, body.reason) for jid in target_ids]
-        return await asyncio.gather(*tasks)
-    else:
-        raise HTTPException(status_code=400, detail=f"Invalid bulk action: {body.action}")
+    return await store.get_all_jobs(limit=limit, status=status)
 
 
-@app.get("/metrics", tags=["System"])
+@app.post(
+    "/jobs/retry",
+    response_model=list[PipelineResult],
+    tags=["Jobs"],
+    summary="Retry handoff for failed jobs",
+    response_description="A list of results — one per job ID — showing whether the retry succeeded.",
+)
+async def retry_failed_jobs(
+    body: RetryHandoffRequest,
+    pipeline: JobPipeline = Depends(get_pipeline),
+):
+    """
+    Retry the handoff step for one or more jobs that previously failed.
+    Only jobs with `status: failed` can be retried.
+
+    This is the only "manual action" endpoint — it exists because network errors
+    or downstream outages can cause handoff failures that are transient and worth retrying.
+
+    **This is NOT a human approval step** — it simply re-sends the already-parsed data.
+    """
+    tasks = [pipeline.retry_handoff(jid) for jid in body.job_ids]
+    return await asyncio.gather(*tasks)
+
+
+# ─── System ────────────────────────────────────────────────────────────────────
+
+@app.get(
+    "/metrics",
+    tags=["System"],
+    summary="Get pipeline performance metrics",
+    response_description="In-memory snapshot of pipeline performance counters and recent run history.",
+)
 async def get_metrics():
-    """Returns in-memory snapshot metrics for monitoring."""
+    """
+    Returns a full snapshot of pipeline performance metrics. Useful for
+    monitoring dashboards and debugging.
+
+    **Response includes:**
+    - `lifetime` — total runs, total jobs fetched/parsed/errors across all time
+    - `per_source` — lifetime job counts and error counts broken down by source
+    - `active_runs` — details of any currently running ingestion jobs
+    - `recent_runs` — history of the last 10 completed runs with timing and counts
+    """
     return get_metrics_collector().get_snapshot()
 
 
-# ─── Health ────────────────────────────────────────────────────────────────────
-
-@app.get("/health", tags=["System"])
+@app.get(
+    "/health",
+    tags=["System"],
+    summary="Health check",
+    response_description="Simple liveness check response.",
+)
 async def health():
+    """
+    Basic liveness check. Returns `{"status": "ok"}` when the server is running.
+    Use this for load balancer health probes or uptime monitoring.
+    """
     return {"status": "ok"}

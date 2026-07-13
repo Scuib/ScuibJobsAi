@@ -2,7 +2,7 @@
 scripts/phase1_test.py
 
 Phase 1 POC: paste a job description, validate LLM extraction,
-inspect the payload that would go to Dozie's algorithm.
+and verify that it is automatically handed off.
 
 Run: python scripts/phase1_test.py
 """
@@ -70,12 +70,12 @@ async def main():
 
     print(f"Result: {result}\n")
 
-    pending = await store.get_pending()
-    if not pending:
-        print("No pending jobs — check parse errors above")
+    jobs = await store.get_all_jobs()
+    if not jobs:
+        print("No jobs found in store — check parse errors above")
         return
 
-    job = pending[0]
+    job = jobs[0]
     print(f"=== Parsed Job (confidence: {job.confidence:.0%}) ===")
     print(f"Title:           {job.job_title}")
     print(f"Company:         {job.company}")
@@ -86,14 +86,12 @@ async def main():
     print(f"Parse warnings:  {job.parse_warnings}")
     print(f"Validation:      {job.validation_issues or 'CLEAN'}\n")
 
-    print("=== Approving and sending to algorithm (MockHandoff) ===\n")
-    approve_result = await pipeline.approve_and_send(job.id, reviewer="silas", notes="Phase 1 test")
-    print(f"Approve result: {approve_result}\n")
-
     if handoff.sent_jobs:
         payload = handoff.sent_jobs[0]
-        print("=== Payload sent to Dozie's algorithm ===")
+        print("=== Payload automatically sent to Dozie's algorithm ===")
         print(json.dumps(payload.model_dump(mode="json"), indent=2))
+    else:
+        print("ERROR: Handoff was not triggered automatically!")
 
 
 if __name__ == "__main__":
