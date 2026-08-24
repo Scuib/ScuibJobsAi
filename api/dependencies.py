@@ -205,21 +205,43 @@ def _build_ingester():
 
 def _build_parser() -> BaseParser:
     """
-    Build a HybridParser: tries Gemini first, falls back to structured extraction.
+    Build parser chain: Gemini -> Groq -> StructuredParser.
+    Each stage is tried in order; low confidence or exception falls through.
     """
+    # Base fallback — always available, no API key needed
+    fallback: BaseParser = StructuredParser()
+
+    # Groq as middle fallback if key present
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key:
+        try:
+            from parsing.groq_parser import GroqParser
+
+            groq = GroqParser(
+                api_key=groq_key,
+                model_name=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            )
+            # Groq -> Structured
+            fallback = HybridParser(primary=groq, fallback=fallback)
+            print(f"Groq fallback enabled (model={groq.model_name})")
+        except Exception as e:
+            print(f"WARNING: GroqParser init failed ({e}) — skipping Groq fallback")
+
     gemini_key = os.getenv("GEMINI_API_KEY")
-
-    fallback = StructuredParser()
-
     if gemini_key:
         primary = GeminiParser(
             api_key=gemini_key,
             model_name=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             fallback_model=os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-pro"),
         )
+        # Gemini -> (Groq -> Structured) or Gemini -> Structured
         return HybridParser(primary=primary, fallback=fallback)
 
-    print("GEMINI_API_KEY not set — using StructuredParser only")
+    if groq_key:
+        print("GEMINI_API_KEY not set — using Groq -> StructuredParser")
+        return fallback
+
+    print("GEMINI_API_KEY and GROQ_API_KEY not set — using StructuredParser only")
     return fallback
 
 
