@@ -10,7 +10,7 @@ import json
 import logging
 import re
 from core.interfaces import BaseParser
-from core.models import RawJob, ParsedJob, SalaryRange, JobSource
+from core.models import RawJob, ParsedJob, SalaryRange, JobSource, stable_job_id
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class StructuredParser(BaseParser):
         skills = _extract_skills(raw.raw_text)
 
         return ParsedJob(
+            id=stable_job_id(raw.source.value, raw.external_id),
             raw_id=raw.id,
             source=raw.source.value,
             job_title=title,
@@ -67,6 +68,8 @@ class StructuredParser(BaseParser):
             required_skills=skills,
             employment_type=emp_type,
             description_clean=_clean_description(raw.raw_text),
+            source_url=raw.source_url,
+            application_link=raw.source_url,
             model_used="structured_parser",
             confidence=0.7,
             parse_warnings=["Parsed via structured extraction (no LLM)"] if not remote else [],
@@ -89,6 +92,7 @@ class StructuredParser(BaseParser):
             warnings.append("Could not extract company name")
 
         return ParsedJob(
+            id=stable_job_id(raw.source.value, raw.external_id),
             raw_id=raw.id,
             job_title=title or "[UNKNOWN]",
             company=company,
@@ -99,6 +103,8 @@ class StructuredParser(BaseParser):
             employment_type=emp_type,
             source=raw.source.value,
             description_clean=_clean_description(text),
+            source_url=raw.source_url,
+            application_link=raw.source_url,
             model_used="structured_parser",
             confidence=0.5 if title else 0.3,
             parse_warnings=warnings,

@@ -38,6 +38,7 @@ class SchemaValidator(BaseValidator):
             self._rule_low_confidence,
             self._rule_salary_sanity,
             self._rule_parse_failed,
+            self._rule_application_link,
         ]
 
     # ─── Individual rules ─────────────────────────────────────────────────────
@@ -75,6 +76,12 @@ class SchemaValidator(BaseValidator):
     def _rule_parse_failed(p: ParsedJob) -> str | None:
         if "[PARSE FAILED]" in p.job_title:
             return "LLM parsing failed — raw text may be corrupt or too short"
+        return None
+
+    @staticmethod
+    def _rule_application_link(p: ParsedJob) -> str | None:
+        if not (p.application_link or p.source_url):
+            return "No application URL — job cannot be handed off while REQUIRE_APPLICATION_LINK is on"
         return None
 
 

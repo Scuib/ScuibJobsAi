@@ -317,10 +317,11 @@ async def get_run_status(
             parsed=run.parsed,
             errors=run.errors,
             duplicates=run.duplicates,
+            skipped=run.skipped,
             per_source=dict(run.per_source),
             message="Ingestion run is currently active and processing.",
         )
-    
+
     # Check completed/archived runs
     snapshot = collector.get_snapshot()
     for r in snapshot["recent_runs"]:
@@ -332,6 +333,7 @@ async def get_run_status(
                 parsed=r["parsed"],
                 errors=r["errors"],
                 duplicates=r["duplicates"],
+                skipped=r.get("skipped", 0),
                 per_source=r["per_source"],
                 message="Ingestion run completed successfully.",
             )

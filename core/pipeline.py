@@ -8,12 +8,22 @@ downstream matching algorithm. No human review step.
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from core.interfaces import BaseIngester, BaseParser, BaseValidator, BaseHandoff, BaseStore
 from core.models import RawJob, ParsedJob, HandoffPayload, JobStatus, PipelineResult, IngestionStats
 from core.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
+
+
+def _require_application_link() -> bool:
+    """When true, jobs without any apply URL are parsed+stored but NOT handed off."""
+    return os.getenv("REQUIRE_APPLICATION_LINK", "true").strip().lower() in ("1", "true", "yes")
+
+
+def _has_application_link(job: ParsedJob) -> bool:
+    return bool((job.application_link or job.source_url or "").strip())
 
 
 class JobPipeline:
@@ -77,6 +87,19 @@ class JobPipeline:
                 parsed.validation_issues = issues
 
                 await self.store.save_parsed(parsed)
+
+                if _require_application_link() and not _has_application_link(parsed):
+                    logger.warning(
+                        f"Skipping handoff for {parsed.id}: no application URL "
+                        f"(REQUIRE_APPLICATION_LINK is on)"
+                    )
+                    return PipelineResult(
+                        success=True,
+                        job_id=parsed.id,
+                        status=JobStatus.PARSED,
+                        message="Parsed and stored, handoff skipped: no application URL",
+                        errors=issues,
+                    )
 
                 try:
                     await self.handoff.send(parsed)
@@ -174,6 +197,7 @@ class JobPipeline:
                     total_parsed=0,
                     total_errors=run.errors,
                     total_duplicates=run.duplicates,
+                    total_skipped=run.skipped,
                     per_source=dict(run.per_source),
                     duration_seconds=run.duration_seconds,
                     jobs_per_second=0.0,
@@ -224,7 +248,19 @@ class JobPipeline:
 
             await self.store.save_parsed_batch(parsed_jobs)
 
+            require_link = _require_application_link()
             for i, job in enumerate(parsed_jobs):
+                if "[PARSE FAILED]" in job.job_title:
+                    # Already counted as error above; still record failure, never hand off
+                    await self.store.update_status(job.id, JobStatus.FAILED, "Parse failed")
+                    continue
+                if require_link and not _has_application_link(job):
+                    run.skipped += 1
+                    logger.warning(
+                        f"BulkIngestion[{run_id}]: skipping handoff for {job.id} "
+                        f"({job.job_title}): no application URL"
+                    )
+                    continue
                 try:
                     await self.handoff.send(job)
                     await self.store.update_status(job.id, JobStatus.SENT, "Bulk auto-handoff")
@@ -237,7 +273,11 @@ class JobPipeline:
                 if progress_callback:
                     progress_callback("handoff", i + 1, len(parsed_jobs))
 
-            logger.info(f"BulkIngestion[{run_id}]: completed — {sent_count}/{len(parsed_jobs)} handed off")
+            logger.info(
+                f"BulkIngestion[{run_id}]: completed — {sent_count}/{len(parsed_jobs)} handed off, "
+                f"{run.skipped} skipped (no application URL), {run.errors} errors, "
+                f"{run.duplicates} duplicates"
+            )
             if progress_callback:
                 progress_callback("completed", sent_count, len(parsed_jobs))
 
@@ -257,6 +297,7 @@ class JobPipeline:
             total_flagged=run.flagged,
             total_errors=run.errors,
             total_duplicates=run.duplicates,
+            total_skipped=run.skipped,
             per_source=dict(run.per_source),
             duration_seconds=run.duration_seconds,
             jobs_per_second=run.jobs_per_second,

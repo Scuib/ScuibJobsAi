@@ -145,6 +145,7 @@ class SupabaseStore(BaseStore):
         id                UUID PRIMARY KEY,
         raw_id            UUID REFERENCES raw_jobs(id),
         status            TEXT NOT NULL DEFAULT 'parsed',
+        source            TEXT,
         job_title         TEXT NOT NULL,
         company           TEXT,
         location          TEXT,
@@ -156,6 +157,8 @@ class SupabaseStore(BaseStore):
         education_level   TEXT,
         employment_type   TEXT,
         description_clean TEXT,
+        source_url        TEXT,
+        application_link  TEXT,
         model_used        TEXT,
         confidence        FLOAT DEFAULT 1.0,
         parse_warnings    TEXT[] DEFAULT '{}',
@@ -164,6 +167,12 @@ class SupabaseStore(BaseStore):
     );
 
     CREATE INDEX parsed_jobs_status_idx ON parsed_jobs(status);
+
+    If the table already exists, run this migration:
+
+    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS source TEXT;
+    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS source_url TEXT;
+    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS application_link TEXT;
     """
 
     def __init__(self, url: str, key: str):

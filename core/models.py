@@ -19,6 +19,18 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+def stable_job_id(source: str, external_id: str | None) -> str:
+    """
+    Deterministic job ID so the same board posting maps to the same ID
+    on every cron run. Lets the downstream backend dedup on job_id even
+    if our staging store is wiped (e.g. Render restart with InMemoryStore).
+    Falls back to a random UUID when there is no stable external_id.
+    """
+    if external_id:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source}:{external_id}"))
+    return new_id()
+
+
 # ─── Lifecycle ───────────────────────────────────────────────────────────────
 
 class JobStatus(str, Enum):
@@ -77,8 +89,13 @@ class ParsedJob(BaseModel):
     preferred_skills:   list[str]  = Field(default_factory=list)
     years_experience:   int | None = None
     education_level:    str | None = None
-    employment_type:    str | None = None   # full-time | contract | part-time
+    employment_type:  str | None = None   # full-time | contract | part-time
     description_clean:  str | None = None   # LLM-cleaned prose description
+
+    # Apply link — forwarded from RawJob.source_url so users can click
+    # through to the original board posting and apply.
+    source_url:       str | None = None   # Job page on the source board
+    application_link: str | None = None   # Direct apply URL (defaults to source_url)
 
     # Parsing metadata
     parsed_at:          datetime   = Field(default_factory=datetime.utcnow)
@@ -111,6 +128,8 @@ class HandoffPayload(BaseModel):
     years_experience: int | None
     employment_type:  str | None
     description:      str | None
+    application_link: str | None = None   # Where the user clicks to apply
+    source_url:       str | None = None   # Original board posting URL
     submitted_at:     datetime = Field(default_factory=datetime.utcnow)
 
     @classmethod
@@ -131,6 +150,8 @@ class HandoffPayload(BaseModel):
             years_experience=p.years_experience,
             employment_type=p.employment_type,
             description=p.description_clean,
+            application_link=p.application_link or p.source_url,
+            source_url=p.source_url,
         )
 
 
@@ -155,6 +176,7 @@ class IngestionStats(BaseModel):
     total_flagged:     int = 0
     total_errors:      int = 0
     total_duplicates:  int = 0
+    total_skipped:     int = 0   # parsed but not handed off (e.g. no application link)
     per_source:        dict[str, int] = Field(default_factory=dict)
     duration_seconds:  float = 0.0
     jobs_per_second:   float = 0.0
@@ -195,5 +217,6 @@ class IngestionRunStatus(BaseModel):
     parsed:     int = 0
     errors:     int = 0
     duplicates: int = 0
+    skipped:    int = 0
     per_source: dict[str, int] = Field(default_factory=dict)
     message:    str = ""

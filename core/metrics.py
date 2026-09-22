@@ -28,6 +28,7 @@ class RunMetrics:
     flagged: int = 0
     errors: int = 0
     duplicates: int = 0
+    skipped: int = 0  # parsed but not handed off (e.g. no application link)
 
     # Per-source breakdown
     per_source: dict[str, int] = field(default_factory=lambda: defaultdict(int))
@@ -78,6 +79,7 @@ class RunMetrics:
             "flagged": self.flagged,
             "errors": self.errors,
             "duplicates": self.duplicates,
+            "skipped": self.skipped,
             "per_source": dict(self.per_source),
             "latency": self.latency_percentiles(),
         }

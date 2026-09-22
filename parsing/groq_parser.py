@@ -18,7 +18,7 @@ from typing import Callable, Any
 import httpx
 
 from core.interfaces import BaseParser
-from core.models import RawJob, ParsedJob, SalaryRange
+from core.models import RawJob, ParsedJob, SalaryRange, stable_job_id
 from core.resilience import AdaptiveRateLimiter
 from parsing.gemini_parser import EXTRACTION_PROMPT
 
@@ -87,8 +87,11 @@ class GroqParser(BaseParser):
                     logger.error(f"GroqParser: chunk job {chunk_start+i} failed: {result}")
                     results.append(
                         ParsedJob(
+                            id=stable_job_id(chunk[i].source.value, chunk[i].external_id),
                             raw_id=chunk[i].id,
                             job_title="[PARSE FAILED]",
+                            source_url=chunk[i].source_url,
+                            application_link=chunk[i].source_url,
                             model_used=self.model_name,
                             confidence=0.0,
                             parse_warnings=[f"Groq parse error: {result}"],
@@ -143,8 +146,11 @@ class GroqParser(BaseParser):
         self._total_errors += 1
         logger.error(f"GroqParser: all attempts failed {raw.id}: {last_exc}")
         return ParsedJob(
+            id=stable_job_id(raw.source.value, raw.external_id),
             raw_id=raw.id,
             job_title="[PARSE FAILED]",
+            source_url=raw.source_url,
+            application_link=raw.source_url,
             model_used=self.model_name,
             confidence=0.0,
             parse_warnings=[f"All {self.max_retries} Groq attempts failed: {last_exc}"],
@@ -194,6 +200,7 @@ class GroqParser(BaseParser):
                 period=salary_data.get("period", "yearly"),
             )
         return ParsedJob(
+            id=stable_job_id(raw.source.value, raw.external_id),
             raw_id=raw.id,
             job_title=data.get("job_title", "[UNKNOWN]"),
             company=data.get("company"),
@@ -206,6 +213,8 @@ class GroqParser(BaseParser):
             education_level=data.get("education_level"),
             employment_type=data.get("employment_type"),
             description_clean=data.get("description_clean"),
+            source_url=raw.source_url,
+            application_link=data.get("application_link") or raw.source_url,
             model_used=self.model_name,
             confidence=float(data.get("confidence", 1.0)),
             parse_warnings=data.get("parse_warnings", []),

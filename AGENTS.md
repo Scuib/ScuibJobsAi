@@ -31,7 +31,8 @@ ingestion/ → parsing/ → validation/ → store/ → handoff/
 - `core/interfaces.py`: ABC contracts for each stage (`BaseIngester`, `BaseParser`, `BaseValidator`, `BaseHandoff`, `BaseStore`).
 - `core/pipeline.py`: `JobPipeline` wires stages via DI. Created in `api/dependencies.py`.
 - `api/dependencies.py`: DI container. Auto-falls back: `SupabaseStore` → `InMemoryStore`, `HTTPHandoff` → `FileHandoff`.
-- `core/models.py`: Data flow `RawJob → ParsedJob → ValidatedJob → HandoffPayload`.
+- `core/models.py`: Data flow `RawJob → ParsedJob → HandoffPayload`. `ParsedJob.id` is a stable uuid5 of `source:external_id` (when external_id exists) so hourly cron reruns map to the same ID — downstream can dedup on `job_id`. `source_url`/`application_link` flow `RawJob → ParsedJob → HandoffPayload.application_link`.
+- `REQUIRE_APPLICATION_LINK=true` (default): jobs with no apply URL are parsed+stored but skipped at handoff (counted as `skipped`, stay `PARSED`). `[PARSE FAILED]` jobs are never handed off. Link-less jobs stay out of Anthony's DB (brand safety).
 - `core/resilience.py`: `CircuitBreaker`, `AdaptiveRateLimiter`, `retry_with_backoff` — used per-ingester, not centrally.
 - `core/metrics.py`: `MetricsCollector` singleton consumed by `GET /metrics`.
 
