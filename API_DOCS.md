@@ -525,7 +525,6 @@ This section is for Anthony. Every qualifying job is POSTed as JSON to `HANDOFF_
 | `job_id` | `string` | **Stable ID** (uuid5 of `source:board-job-id`). The same board posting always produces the same `job_id` — dedup on this (stored as `source_job_id`). |
 | `job_title` | `string` | Extracted title. Never `[PARSE FAILED]` — failed parses are never handed off. |
 | `company` | `string \| null` | Company name, when found. |
-| `source` | `string \| null` | Board it came from (`workable`, `myjobmag`, …). |
 | `location` | `string \| null` | Job location text. |
 | `remote` | `boolean` | Remote/work-from-home flag — drive the Remote toggle in the UI from this. |
 | `salary_min` / `salary_max` | `integer \| null` | Salary range numbers. |
@@ -538,6 +537,8 @@ This section is for Anthony. Every qualifying job is POSTed as JSON to `HANDOFF_
 | `source_url` | `string \| null` | Original board posting URL. |
 | `posted_date` | `string \| null` | Board-posted date as `YYYY-MM-DD`. **Needs a matching column** — this powers the 24h / 1 week / 1 month filter toggles in the UI. |
 | `submitted_at` | `string (ISO 8601)` | When our pipeline handed the job off. |
+
+> **Board sources are internal-only.** The payload carries `application_link` + `source_url` (so users can click through and apply) but never the board's name (`workable`, `myjobmag`, …). Users see *where to apply*, never *where we scraped it from*.
 
 **Three integration asks** (the user-facing features depend on these):
 

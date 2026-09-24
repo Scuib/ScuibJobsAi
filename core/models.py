@@ -157,7 +157,8 @@ class HandoffPayload(BaseModel):
     job_id:           str
     job_title:        str
     company:          str | None
-    source:           str | None = None
+    # NOTE: board `source` is intentionally NOT part of this payload.
+    # It stays internal to the pipeline; users must never see it.
     location:         str | None
     remote:           bool
     salary_min:       int | None
@@ -180,7 +181,6 @@ class HandoffPayload(BaseModel):
             job_id=p.id,
             job_title=p.job_title,
             company=p.company,
-            source=p.source,
             location=p.location,
             remote=p.remote,
             salary_min=p.salary.min if p.salary else None,
