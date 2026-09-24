@@ -15,7 +15,7 @@ from typing import AsyncIterator
 import httpx
 
 from core.interfaces import BaseIngester
-from core.models import RawJob, JobSource
+from core.models import RawJob, JobSource, normalize_posted_date
 from core.resilience import CircuitBreaker, AdaptiveRateLimiter, retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,7 @@ class IndeedRSSIngester(BaseIngester):
                                     metadata={
                                         "title": item.get("title"),
                                         "pub_date": item.get("pubDate"),
+                                        "posted_date": normalize_posted_date(item.get("pubDate")),
                                         "query": query,
                                     },
                                 )
@@ -303,6 +304,7 @@ class JSearchIngester(BaseIngester):
                             metadata={
                                 "employer": job.get("employer_name"),
                                 "posted_at": job.get("job_posted_at_datetime_utc"),
+                                "posted_date": normalize_posted_date(job.get("job_posted_at_datetime_utc")),
                                 "query": self.query,
                             },
                         )

@@ -159,6 +159,7 @@ class SupabaseStore(BaseStore):
         description_clean TEXT,
         source_url        TEXT,
         application_link  TEXT,
+        posted_date       DATE,
         model_used        TEXT,
         confidence        FLOAT DEFAULT 1.0,
         parse_warnings    TEXT[] DEFAULT '{}',
@@ -173,6 +174,7 @@ class SupabaseStore(BaseStore):
     ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS source TEXT;
     ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS source_url TEXT;
     ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS application_link TEXT;
+    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS posted_date DATE;
     """
 
     def __init__(self, url: str, key: str):

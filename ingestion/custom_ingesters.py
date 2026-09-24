@@ -19,7 +19,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from core.interfaces import BaseIngester
-from core.models import RawJob, JobSource
+from core.models import RawJob, JobSource, normalize_posted_date
 from core.resilience import CircuitBreaker, AdaptiveRateLimiter, retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -88,6 +88,7 @@ class WorkableIngester(BaseIngester):
                                 "employment_type": job.get("employmentType"),
                                 "workplace": job.get("workplace"),
                                 "published_at": job.get("created"),
+                                "posted_date": normalize_posted_date(job.get("created")),
                                 "company_info": job.get("company"),
                             },
                         )

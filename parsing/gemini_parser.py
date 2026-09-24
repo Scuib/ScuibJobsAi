@@ -48,6 +48,7 @@ Required JSON schema:
   "employment_type": "full-time | part-time | contract | internship or null",
   "description_clean": "2-3 sentence plain summary of the role",
   "application_link": "apply URL found in the posting, or null",
+  "posted_date": "date the job was posted as written (YYYY-MM-DD), or null — do NOT guess",
   "confidence": 0.0 to 1.0,
   "parse_warnings": ["string", ...]
 }
@@ -166,6 +167,7 @@ class GeminiParser(BaseParser):
                         job_title="[PARSE FAILED]",
                         source_url=chunk[i].source_url,
                         application_link=chunk[i].source_url,
+                        posted_date=(chunk[i].metadata or {}).get("posted_date"),
                         model_used=self.model_name,
                         confidence=0.0,
                         parse_warnings=[f"Batch parse error: {result}"],
@@ -274,6 +276,7 @@ class GeminiParser(BaseParser):
             job_title="[PARSE FAILED]",
             source_url=raw.source_url,
             application_link=raw.source_url,
+            posted_date=(raw.metadata or {}).get("posted_date"),
             model_used=self.model_name,
             confidence=0.0,
             parse_warnings=[
@@ -334,6 +337,7 @@ class GeminiParser(BaseParser):
             description_clean=data.get("description_clean"),
             source_url=raw.source_url,
             application_link=data.get("application_link") or raw.source_url,
+            posted_date=data.get("posted_date") or (raw.metadata or {}).get("posted_date"),
             model_used=model_name,
             confidence=float(data.get("confidence", 1.0)),
             parse_warnings=data.get("parse_warnings", []),

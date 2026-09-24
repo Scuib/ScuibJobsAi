@@ -9,6 +9,7 @@ regex-based extraction for raw HTML/text sources.
 import json
 import logging
 import re
+from datetime import datetime, timedelta
 from core.interfaces import BaseParser
 from core.models import RawJob, ParsedJob, SalaryRange, JobSource, stable_job_id
 
@@ -70,6 +71,7 @@ class StructuredParser(BaseParser):
             description_clean=_clean_description(raw.raw_text),
             source_url=raw.source_url,
             application_link=raw.source_url,
+            posted_date=meta.get("posted_date") or _extract_posted_date(raw.raw_text, raw.fetched_at),
             model_used="structured_parser",
             confidence=0.7,
             parse_warnings=["Parsed via structured extraction (no LLM)"] if not remote else [],
@@ -105,6 +107,7 @@ class StructuredParser(BaseParser):
             description_clean=_clean_description(text),
             source_url=raw.source_url,
             application_link=raw.source_url,
+            posted_date=(raw.metadata or {}).get("posted_date") or _extract_posted_date(text, raw.fetched_at),
             model_used="structured_parser",
             confidence=0.5 if title else 0.3,
             parse_warnings=warnings,
@@ -203,6 +206,68 @@ def _extract_skills(text: str) -> list[str]:
         if skill.lower() in text_lower:
             found.append(skill)
     return found
+
+
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _extract_posted_date(text: str, fetched_at: datetime | None = None) -> str | None:
+    """
+    Best-effort posted-date extraction from HTML board text → 'YYYY-MM-DD'.
+    Only trusts dates appearing near 'post' context, plus ISO dates.
+    Relative dates ('X days ago') resolve against fetched_at (defaults to now).
+    Returns None when nothing reliable is found (caller keeps the job).
+    """
+    ref = fetched_at or datetime.utcnow()
+
+    # ISO date anywhere
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", text)
+    if m:
+        return m.group(1)
+
+    # '12 Sep 2026' / '12 September 2026'
+    m = re.search(
+        r"(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})",
+        text, re.IGNORECASE,
+    )
+    if m:
+        try:
+            return datetime(int(m.group(3)), _MONTHS[m.group(2).lower()[:3]], int(m.group(1))).date().isoformat()
+        except ValueError:
+            pass
+
+    # 'Sep 12, 2026' / 'September 12, 2026'
+    m = re.search(
+        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})",
+        text, re.IGNORECASE,
+    )
+    if m:
+        try:
+            return datetime(int(m.group(3)), _MONTHS[m.group(1).lower()[:3]], int(m.group(2))).date().isoformat()
+        except ValueError:
+            pass
+
+    # Relative dates — require 'post' nearby to avoid false positives
+    # e.g. 'Posted 3 days ago', 'Posted: 2 weeks ago', 'Posted today'
+    for m in re.finditer(
+        r"post(?:ed)?[^.\n]{0,30}?\b(\d+)\s+(day|week|month)s?\s+ago\b"
+        r"|\b(\d+)\s+(day|week|month)s?\s+ago\b[^.\n]{0,30}?post",
+        text, re.IGNORECASE,
+    ):
+        num = int(m.group(1) or m.group(3))
+        unit = (m.group(2) or m.group(4)).lower()
+        delta = {"day": num, "week": num * 7, "month": num * 30}[unit]
+        return (ref - timedelta(days=delta)).date().isoformat()
+
+    m = re.search(r"post(?:ed)?[^.\n]{0,20}?\b(today|yesterday)\b", text, re.IGNORECASE)
+    if m:
+        days = 1 if m.group(1).lower() == "yesterday" else 0
+        return (ref - timedelta(days=days)).date().isoformat()
+
+    return None
 
 
 def _extract_employment_type(text: str) -> str | None:

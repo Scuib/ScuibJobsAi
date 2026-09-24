@@ -39,6 +39,7 @@ class SchemaValidator(BaseValidator):
             self._rule_salary_sanity,
             self._rule_parse_failed,
             self._rule_application_link,
+            self._rule_posted_date,
         ]
 
     # ─── Individual rules ─────────────────────────────────────────────────────
@@ -82,6 +83,12 @@ class SchemaValidator(BaseValidator):
     def _rule_application_link(p: ParsedJob) -> str | None:
         if not (p.application_link or p.source_url):
             return "No application URL — job cannot be handed off while REQUIRE_APPLICATION_LINK is on"
+        return None
+
+    @staticmethod
+    def _rule_posted_date(p: ParsedJob) -> str | None:
+        if not p.posted_date:
+            return "No board posted-date found — freshness gate cannot verify age"
         return None
 
 

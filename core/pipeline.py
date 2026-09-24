@@ -26,6 +26,33 @@ def _has_application_link(job: ParsedJob) -> bool:
     return bool((job.application_link or job.source_url or "").strip())
 
 
+def _max_job_age_days() -> int | None:
+    """Max age (days) of a job's board-posted date to still hand it off. None = no limit."""
+    raw = os.getenv("MAX_JOB_AGE_DAYS", "1").strip()
+    if not raw or raw == "0":
+        return None
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 1
+
+
+def _is_fresh(job: ParsedJob, max_age_days: int | None) -> bool:
+    """
+    True when the job is fresh enough to hand off. Jobs with no known
+    posted_date are kept (can't prove they're old) — only dated jobs older
+    than max_age_days are skipped.
+    """
+    if max_age_days is None or not job.posted_date:
+        return True
+    try:
+        posted = datetime.fromisoformat(job.posted_date[:10]).date()
+        age = (datetime.utcnow().date() - posted).days
+        return age <= max_age_days
+    except (ValueError, TypeError):
+        return True
+
+
 class JobPipeline:
     """
     Wires together the four pipeline stages.
@@ -98,6 +125,20 @@ class JobPipeline:
                         job_id=parsed.id,
                         status=JobStatus.PARSED,
                         message="Parsed and stored, handoff skipped: no application URL",
+                        errors=issues,
+                    )
+
+                max_age = _max_job_age_days()
+                if not _is_fresh(parsed, max_age):
+                    logger.warning(
+                        f"Skipping handoff for {parsed.id}: posted {parsed.posted_date} "
+                        f"is older than MAX_JOB_AGE_DAYS={max_age}"
+                    )
+                    return PipelineResult(
+                        success=True,
+                        job_id=parsed.id,
+                        status=JobStatus.PARSED,
+                        message=f"Parsed and stored, handoff skipped: posted {parsed.posted_date} too old",
                         errors=issues,
                     )
 
@@ -249,6 +290,7 @@ class JobPipeline:
             await self.store.save_parsed_batch(parsed_jobs)
 
             require_link = _require_application_link()
+            max_age = _max_job_age_days()
             for i, job in enumerate(parsed_jobs):
                 if "[PARSE FAILED]" in job.job_title:
                     # Already counted as error above; still record failure, never hand off
@@ -259,6 +301,14 @@ class JobPipeline:
                     logger.warning(
                         f"BulkIngestion[{run_id}]: skipping handoff for {job.id} "
                         f"({job.job_title}): no application URL"
+                    )
+                    continue
+                if not _is_fresh(job, max_age):
+                    run.skipped += 1
+                    logger.warning(
+                        f"BulkIngestion[{run_id}]: skipping handoff for {job.id} "
+                        f"({job.job_title}): posted {job.posted_date} older than "
+                        f"MAX_JOB_AGE_DAYS={max_age}"
                     )
                     continue
                 try:

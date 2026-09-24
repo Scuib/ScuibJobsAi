@@ -8,6 +8,7 @@ Fully automatic: no human review gate. Every parsed job is handed off directly.
 """
 
 from __future__ import annotations
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -29,6 +30,42 @@ def stable_job_id(source: str, external_id: str | None) -> str:
     if external_id:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source}:{external_id}"))
     return new_id()
+
+
+def normalize_posted_date(value: Any | None) -> str | None:
+    """
+    Normalize a board/API posted-date value to 'YYYY-MM-DD'.
+    Accepts ISO datetimes ('2026-09-20T12:00:00Z'), plain dates,
+    RFC822 ('Sat, 20 Sep 2026 12:00:00 GMT'), or date objects.
+    Returns None when the value is missing or unparseable (caller keeps the job).
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if hasattr(value, "isoformat"):  # date objects
+        try:
+            return value.isoformat()[:10]
+        except Exception:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Plain YYYY-MM-DD (or prefixed)
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", text)
+    if m:
+        return m.group(1)
+    # ISO datetime (Python 3.11+ handles 'Z')
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        pass
+    # RFC822 / email-style dates (Indeed RSS pubDate)
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(text).date().isoformat()
+    except Exception:
+        return None
 
 
 # ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -97,6 +134,9 @@ class ParsedJob(BaseModel):
     source_url:       str | None = None   # Job page on the source board
     application_link: str | None = None   # Direct apply URL (defaults to source_url)
 
+    # Board-posted date (YYYY-MM-DD) — powers "posted 24h / 1wk / 1mo" toggles downstream.
+    posted_date:      str | None = None
+
     # Parsing metadata
     parsed_at:          datetime   = Field(default_factory=datetime.utcnow)
     model_used:         str        = ""
@@ -130,6 +170,7 @@ class HandoffPayload(BaseModel):
     description:      str | None
     application_link: str | None = None   # Where the user clicks to apply
     source_url:       str | None = None   # Original board posting URL
+    posted_date:      str | None = None   # Board-posted date (YYYY-MM-DD)
     submitted_at:     datetime = Field(default_factory=datetime.utcnow)
 
     @classmethod
@@ -152,6 +193,7 @@ class HandoffPayload(BaseModel):
             description=p.description_clean,
             application_link=p.application_link or p.source_url,
             source_url=p.source_url,
+            posted_date=p.posted_date,
         )
 
 

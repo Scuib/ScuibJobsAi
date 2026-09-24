@@ -14,7 +14,7 @@ from typing import AsyncIterator
 import httpx
 
 from core.interfaces import BaseIngester
-from core.models import RawJob, JobSource
+from core.models import RawJob, JobSource, normalize_posted_date
 from core.resilience import CircuitBreaker, AdaptiveRateLimiter, retry_with_backoff
 
 logger = logging.getLogger(__name__)
@@ -102,6 +102,7 @@ class AdzunaIngester(BaseIngester):
                             metadata={
                                 "employer": (job.get("company") or {}).get("display_name"),
                                 "posted_at": job.get("created"),
+                                "posted_date": normalize_posted_date(job.get("created")),
                                 "category": (job.get("category") or {}).get("label"),
                                 "contract_type": job.get("contract_type"),
                             },
