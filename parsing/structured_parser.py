@@ -118,7 +118,10 @@ def _extract_title(text: str) -> str | None:
     patterns = [
         r"^Title:\s*(.+)",
         r"(?:job\s*)?title[:\s]+([^\n]+)",
+        # Tech roles
         r"^([A-Z][A-Za-z\s]+(?:Engineer|Developer|Manager|Designer|Analyst|Architect|Consultant|Lead|Head|Director))",
+        # Non-tech roles: support, admin, sales, finance, HR, creative
+        r"^([A-Z][A-Za-z\s]+(?:Representative|Assistant|Associate|Specialist|Coordinator|Agent|Clerk|Officer|Executive|Accountant|Marketer|Writer|Nurse|Teacher|Driver|Cleaner|Cook|Security|Cashier|Receptionist|Secretary))",
     ]
     for p in patterns:
         m = re.search(p, text, re.IGNORECASE | re.MULTILINE)
@@ -191,6 +194,7 @@ def _extract_salary(text: str) -> SalaryRange | None:
 
 def _extract_skills(text: str) -> list[str]:
     known_skills = [
+        # Tech
         "Python", "Java", "JavaScript", "TypeScript", "Go", "Rust", "C++", "C#",
         "React", "Angular", "Vue", "Node.js", "Django", "Flask", "FastAPI",
         "PostgreSQL", "MySQL", "MongoDB", "Redis", "Kubernetes", "Docker",
@@ -199,11 +203,30 @@ def _extract_skills(text: str) -> list[str]:
         "REST API", "GraphQL", "gRPC", "Kafka", "RabbitMQ", "Spark", "Flink",
         "Agile", "Scrum", "SQL", "NoSQL", "HTML", "CSS", "Sass",
         "Figma", "Photoshop", "Illustrator", "UI/UX", "Product Management",
+        # Customer service & support
+        "Customer Service", "Customer Support", "Communication", "Call Center",
+        "CRM", "Zendesk", "Intercom", "Live Chat", "Complaint Resolution",
+        # Admin / office / VA
+        "Data Entry", "Microsoft Office", "MS Excel", "MS Word", "Google Workspace",
+        "Typing", "Scheduling", "Calendar Management", "Email Management",
+        "Bookkeeping", "Record Keeping", "Filing", "Transcription",
+        # Sales & marketing
+        "Sales", "Marketing", "Digital Marketing", "Social Media", "SEO",
+        "Content Writing", "Copywriting", "Lead Generation", "Negotiation",
+        "Market Research", "Brand Management", "Advertising",
+        # Finance / HR
+        "Accounting", "Payroll", "Invoicing", "QuickBooks", "Financial Reporting",
+        "Recruitment", "Human Resources", "Onboarding", "Training",
+        # General professional
+        "Project Management", "Time Management", "Problem Solving",
+        "Teamwork", "Attention to Detail", "Multitasking", "Report Writing",
     ]
     found = []
-    text_lower = text.lower()
     for skill in known_skills:
-        if skill.lower() in text_lower:
+        # Word-boundary match so short skills don't hit substrings
+        # ("AI" in "email", "Go" in "Google", "Java" in "JavaScript").
+        pattern = r"(?<!\w)" + re.escape(skill) + r"(?!\w)"
+        if re.search(pattern, text, re.IGNORECASE):
             found.append(skill)
     return found
 

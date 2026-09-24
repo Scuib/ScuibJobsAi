@@ -650,7 +650,7 @@ export default {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            queries: ["software engineer", "backend developer", "frontend developer", "data analyst"],
+            queries: ["customer service", "virtual assistant", "data entry", "administrative assistant", "sales representative", "software engineer", "backend developer", "accounting", "marketing"],
             locations: ["Nigeria"],
             sources: ["workable", "myjobmag", "fuzu", "jobgurus", "jobberman"],
             target_count: 60,

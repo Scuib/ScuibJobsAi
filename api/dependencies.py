@@ -170,7 +170,7 @@ def build_dynamic_aggregator(
 
 
 def _build_ingester():
-    queries_raw = os.getenv("INGEST_QUERIES", "software engineer,backend developer,python developer,frontend developer,full stack developer,devops engineer,data scientist,react developer,javascript developer")
+    queries_raw = os.getenv("INGEST_QUERIES", "software engineer,backend developer,customer service,virtual assistant,data entry,administrative assistant,sales representative,accounting,marketing,digital marketing")
     queries = [q.strip() for q in queries_raw.split(",") if q.strip()]
 
     locations_raw = os.getenv("INGEST_LOCATIONS", "Nigeria")
