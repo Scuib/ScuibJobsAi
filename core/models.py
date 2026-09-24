@@ -189,7 +189,7 @@ class BulkIngestionRequest(BaseModel):
         description="Search queries to run across all sources",
     )
     locations:     list[str] = Field(
-        default=["remote", "United States"],
+        default=["Nigeria"],
         description="Locations to search in",
     )
     sources:       list[JobSource] = Field(
