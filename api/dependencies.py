@@ -163,14 +163,24 @@ def build_dynamic_aggregator(
         for query in queries:
             ingesters.append(JobbermanIngester(query=query))
 
+    # Balance: split the target evenly across distinct sources so the
+    # fastest board can't eat the whole quota before slow ones deliver.
+    distinct_sources = {s.value for s in sources} or {"default"}
+    max_per_source = max(1, target_count // len(distinct_sources))
+    print(
+        f"Aggregator balancing: target={target_count} across "
+        f"{len(distinct_sources)} sources -> max_per_source={max_per_source}"
+    )
+
     return MultiSourceAggregator(
         ingesters=ingesters,
         target_count=target_count,
+        max_per_source=max_per_source,
     )
 
 
 def _build_ingester():
-    queries_raw = os.getenv("INGEST_QUERIES", "software engineer,backend developer,customer service,virtual assistant,data entry,administrative assistant,sales representative,accounting,marketing,digital marketing")
+    queries_raw = os.getenv("INGEST_QUERIES", "customer service,virtual assistant,data entry,graphics designer,motion designer,web designer,sales representative,marketing,accounting,software engineer")
     queries = [q.strip() for q in queries_raw.split(",") if q.strip()]
 
     locations_raw = os.getenv("INGEST_LOCATIONS", "Nigeria")

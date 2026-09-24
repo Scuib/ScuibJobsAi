@@ -29,17 +29,24 @@ class MultiSourceAggregator(BaseIngester):
     Capabilities:
     - Concurrent multi-source fetching (all sources run in parallel)
     - Cross-source deduplication by external_id + title/company fingerprint
+    - Per-source balance caps so one fast board can't eat the whole target
     - Per-source circuit breakers (skip failing sources, don't block others)
     - Configurable target volume with early termination
     - Per-source metrics/counters
+
+    Balancing: while fetching, each source may yield at most `max_per_source`
+    jobs; extras are buffered. Once every source is exhausted, buffered jobs
+    drain FIFO until the target is met. Result: every live source is
+    represented, and slow sources aren't starved by fast ones.
 
     Usage:
         aggregator = MultiSourceAggregator(
             ingesters=[jsearch, indeed, adzuna],
             target_count=200,
+            max_per_source=70,
         )
         async for raw_job in aggregator.fetch():
-            # Unique jobs from all sources
+            # Unique, source-balanced jobs
             ...
     """
 
@@ -48,14 +55,19 @@ class MultiSourceAggregator(BaseIngester):
         ingesters: list[BaseIngester],
         target_count: int = 200,
         dedup_by_fingerprint: bool = True,
+        max_per_source: int | None = None,
     ):
         self.ingesters = ingesters
         self.target_count = target_count
         self.dedup_by_fingerprint = dedup_by_fingerprint
+        self.max_per_source = max_per_source
 
         # Dedup state
         self._seen_external_ids: set[str] = set()
         self._seen_fingerprints: set[str] = set()
+
+        # Balance buffer: capped-out sources park extras here for the fill phase
+        self._overflow: list[RawJob] = []
 
         # Metrics
         self.per_source_counts: dict[str, int] = defaultdict(int)
@@ -141,7 +153,25 @@ class MultiSourceAggregator(BaseIngester):
                     continue
                 self._seen_fingerprints.add(fp)
 
+            # Balance cap: park extras from full sources for the fill phase
+            source_key = item.source.value
+            if (
+                self.max_per_source
+                and self.per_source_counts[source_key] >= self.max_per_source
+            ):
+                self._overflow.append(item)
+                continue
+
             # Yield the deduplicated job
+            self.per_source_counts[source_key] += 1
+            self.total_yielded += 1
+            yield item
+
+        # Fill phase: all sources exhausted — drain buffered overflow FIFO
+        # until the target is met (no caps here).
+        for item in self._overflow:
+            if self.total_yielded >= self.target_count:
+                break
             source_key = item.source.value
             self.per_source_counts[source_key] += 1
             self.total_yielded += 1

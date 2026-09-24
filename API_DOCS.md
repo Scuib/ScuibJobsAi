@@ -204,7 +204,7 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 | `queries` | `list[string]` | `["software engineer"]` | Search keywords. Each query runs against every source × location combination, so keep this list short (3–5 items) — 10 queries × 8 sources means up to 80 fetchers and a very long run. |
 | `locations` | `list[string]` | `["Nigeria"]` | Locations to search in. Use `["Nigeria"]` for a strictly Nigerian feed. (Adding `"remote"` pulls in mostly foreign remote listings — not recommended.) |
 | `sources` | `list[string]` | `["jsearch_api", "indeed_rss", "adzuna_api"]` | Which boards to pull from. Valid values: `workable`, `myjobmag`, `fuzu`, `jobgurus`, `jobberman`, `jsearch_api`, `indeed_rss`, `adzuna_api`. Start with the five Nigerian/global boards; add the API sources once jobs are flowing. |
-| `target_count` | `integer` | `200` | Stop fetching after this many unique jobs (range 1–2000). **Keep this small on free hosting** (50–80): a 200-target run with HTML scraping can take longer than the platform's idle timeout and get killed mid-run. |
+| `target_count` | `integer` | `200` | Stop fetching after this many unique jobs (range 1–2000). **Keep this small on free hosting** (50–80): a 200-target run with HTML scraping can take longer than the platform's idle timeout and get killed mid-run. The target is split evenly per board (target ÷ distinct sources), so fast boards can't starve slow ones — capped boards buffer extras and drain them after all boards finish. |
 | `remote_only` | `boolean` | `false` | If `true`, only fetch remote/work-from-home jobs. Only meaningful for JSearch. |
 | `date_posted` | `string` | `"week"` | Recency window, enforced server-side by JSearch and Adzuna. Options: `today`, `3days`, `week`, `month`. Use `"month"` (widest) when you want everything with dates recorded — the UI-side 24h/1wk/1mo toggles filter on the stored `posted_date` afterwards. |
 
@@ -650,7 +650,7 @@ export default {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            queries: ["customer service", "virtual assistant", "data entry", "administrative assistant", "sales representative", "software engineer", "backend developer", "accounting", "marketing"],
+            queries: ["customer service", "graphics designer", "motion designer", "web designer", "data entry", "sales representative", "marketing", "accounting", "software engineer"],
             locations: ["Nigeria"],
             sources: ["workable", "myjobmag", "fuzu", "jobgurus", "jobberman"],
             target_count: 60,
