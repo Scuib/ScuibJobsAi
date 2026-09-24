@@ -78,11 +78,19 @@ class InMemoryStore(BaseStore):
     async def get_by_id(self, job_id: str) -> ParsedJob | None:
         return self._parsed.get(job_id)
 
-    async def get_all_jobs(self, limit: int = 100, status: str | None = None) -> list[ParsedJob]:
+    async def get_all_jobs(
+        self, limit: int = 100, offset: int = 0, status: str | None = None
+    ) -> list[ParsedJob]:
         jobs = list(self._parsed.values())
         if status:
             jobs = [j for j in jobs if j.status.value == status]
-        return jobs[:limit]
+        jobs.sort(key=lambda j: j.parsed_at, reverse=True)
+        return jobs[offset:offset + limit]
+
+    async def get_jobs_count(self, status: str | None = None) -> int:
+        if not status:
+            return len(self._parsed)
+        return sum(1 for j in self._parsed.values() if j.status.value == status)
 
     # ─── Batch operations (enterprise) ────────────────────────────────────────
 
@@ -239,7 +247,9 @@ class SupabaseStore(BaseStore):
             logger.error(f"Supabase get_by_id failed: {e}")
         return None
 
-    async def get_all_jobs(self, limit: int = 100, status: str | None = None) -> list[ParsedJob]:
+    async def get_all_jobs(
+        self, limit: int = 100, offset: int = 0, status: str | None = None
+    ) -> list[ParsedJob]:
         import asyncio
         try:
             loop = asyncio.get_event_loop()
@@ -248,12 +258,30 @@ class SupabaseStore(BaseStore):
                 query = query.eq("status", status)
             result = await loop.run_in_executor(
                 None,
-                lambda: query.limit(limit).order("parsed_at", desc=True).execute()
+                lambda: query.order("parsed_at", desc=True)
+                    .range(offset, offset + limit - 1)
+                    .execute()
             )
             return [ParsedJob(**row) for row in (result.data or [])]
         except Exception as e:
             logger.error(f"Supabase get_all_jobs failed: {e}")
         return []
+
+    async def get_jobs_count(self, status: str | None = None) -> int:
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            query = self.client.table("parsed_jobs").select("id", count="exact")
+            if status:
+                query = query.eq("status", status)
+            result = await loop.run_in_executor(
+                None,
+                lambda: query.limit(1).execute()
+            )
+            return result.count or 0
+        except Exception as e:
+            logger.error(f"Supabase get_jobs_count failed: {e}")
+        return 0
 
     # ─── Batch operations (enterprise) ────────────────────────────────────────
 

@@ -28,13 +28,13 @@ def _has_application_link(job: ParsedJob) -> bool:
 
 def _max_job_age_days() -> int | None:
     """Max age (days) of a job's board-posted date to still hand it off. None = no limit."""
-    raw = os.getenv("MAX_JOB_AGE_DAYS", "1").strip()
+    raw = os.getenv("MAX_JOB_AGE_DAYS", "0").strip()
     if not raw or raw == "0":
         return None
     try:
         return max(0, int(raw))
     except ValueError:
-        return 1
+        return None
 
 
 def _is_fresh(job: ParsedJob, max_age_days: int | None) -> bool:

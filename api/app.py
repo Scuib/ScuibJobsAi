@@ -15,6 +15,7 @@ from core.models import (
     BulkIngestionRequest,
     IngestionRunStatus,
     IngestionStats,
+    PagedJobs,
 )
 from core.pipeline import JobPipeline
 from core.metrics import get_metrics_collector
@@ -396,28 +397,35 @@ async def get_job(
 
 @app.get(
     "/jobs",
-    response_model=list[ParsedJob],
+    response_model=PagedJobs,
     tags=["Jobs"],
-    summary="List all processed jobs",
-    response_description="A list of parsed job objects, optionally filtered by status.",
+    summary="List processed jobs (paginated)",
+    response_description="One page of parsed job objects plus pagination metadata.",
 )
 async def list_jobs(
-    limit: int = Query(default=100, ge=1, le=1000, description="Maximum number of jobs to return (1–1000)."),
+    page: int = Query(default=1, ge=1, description="Page number, starting at 1."),
+    page_size: int = Query(default=50, ge=1, le=500, description="Jobs per page (1–500)."),
     status: str | None = Query(default=None, description="Filter by job status. Valid values: `parsed`, `sent`, `failed`. Leave empty for all jobs."),
     store=Depends(get_store),
 ):
     """
-    Fetch a list of jobs that have been processed by the pipeline.
-    Supports optional filtering by status.
+    Fetch jobs page by page — never the whole table at once.
 
     **Status values:**
     - `parsed` — AI extraction complete, waiting for handoff
     - `sent` — successfully delivered to the matching algorithm
     - `failed` — handoff or parsing failed (can be retried with `POST /jobs/retry`)
 
-    Jobs are returned newest-first. Use `limit` to control page size.
+    Jobs are returned newest-first. Walk pages with `page=1,2,3…`
+    until `page > total_pages`.
     """
-    return await store.get_all_jobs(limit=limit, status=status)
+    offset = (page - 1) * page_size
+    jobs = await store.get_all_jobs(limit=page_size, offset=offset, status=status)
+    total = await store.get_jobs_count(status=status)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    return PagedJobs(
+        jobs=jobs, page=page, page_size=page_size, total=total, total_pages=total_pages
+    )
 
 
 @app.post(

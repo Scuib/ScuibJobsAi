@@ -119,6 +119,12 @@ class BaseStore(ABC):
         """Aggregate stats: count by status, by source, etc."""
         return {}
 
-    async def get_all_jobs(self, limit: int = 100, status: str | None = None) -> list[ParsedJob]:
-        """Fetch jobs with optional status filter. For monitoring/dashboard use."""
+    async def get_all_jobs(
+        self, limit: int = 100, offset: int = 0, status: str | None = None
+    ) -> list[ParsedJob]:
+        """Fetch one page of jobs, newest-first, with optional status filter."""
         return []
+
+    async def get_jobs_count(self, status: str | None = None) -> int:
+        """Total jobs matching the optional status filter (for pagination)."""
+        return 0

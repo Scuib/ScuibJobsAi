@@ -214,29 +214,31 @@ Read-only endpoints for browsing and monitoring processed jobs. Use these to bui
 
 ### `GET /jobs`
 
-**What it does:** Lists all processed jobs with optional filtering by status.
+**What it does:** Lists processed jobs **one page at a time**, with optional filtering by status. Never returns the whole table at once.
 
-**When to use:** Building the main jobs table/list view in the dashboard.
+**When to use:** Building the main jobs table/list view in the dashboard. Walk `page=1,2,3…` until `page > total_pages`.
 
 **Query parameters:**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | `integer` | `100` | Max jobs to return (1–1000) |
+| `page` | `integer` | `1` | Page number, starting at 1 |
+| `page_size` | `integer` | `50` | Jobs per page (1–500) |
 | `status` | `string` | (all) | Filter by status: `parsed`, `sent`, `failed` |
 
 **Example requests:**
 ```
-GET /jobs                        → All jobs, up to 100
-GET /jobs?limit=50               → First 50 jobs
-GET /jobs?status=failed          → Only failed jobs
-GET /jobs?status=sent&limit=200  → Up to 200 sent jobs
+GET /jobs                                  → Page 1, 50 newest jobs
+GET /jobs?page=2&page_size=50              → Next 50 jobs
+GET /jobs?status=failed                    → Page 1 of failed jobs
+GET /jobs?status=sent&page_size=200        → Page 1, 200 sent jobs
 ```
 
 **Response:**
 ```json
-[
-  {
+{
+  "jobs": [
+    {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "raw_id": "660f9500-f30c-52e5-b827-557766551111",
     "status": "sent",
@@ -262,8 +264,13 @@ GET /jobs?status=sent&limit=200  → Up to 200 sent jobs
     "confidence": 0.92,
     "parse_warnings": [],
     "validation_issues": []
-  }
-]
+    }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 863,
+  "total_pages": 18
+}
 ```
 
 ---

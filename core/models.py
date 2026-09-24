@@ -262,3 +262,12 @@ class IngestionRunStatus(BaseModel):
     skipped:    int = 0
     per_source: dict[str, int] = Field(default_factory=dict)
     message:    str = ""
+
+
+class PagedJobs(BaseModel):
+    """One page of processed jobs with pagination metadata."""
+    jobs:        list["ParsedJob"] = Field(default_factory=list)
+    page:        int = 1
+    page_size:   int = 50
+    total:       int = 0
+    total_pages: int = 0
