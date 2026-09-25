@@ -781,6 +781,8 @@ Copy `.env.example` to `.env` locally; set the same keys in the Render dashboard
 | Fuzu | `fuzu` | HTML scrape | `www.fuzu.com/{location}/search?q=` | None | Best-effort text extraction |
 | JobGurus | `jobgurus` | HTML scrape | `www.jobgurus.com.ng/jobs` | None | Best-effort text extraction |
 | Jobberman | `jobberman` | HTML scrape | `www.jobberman.com/jobs?q=` | None | Best-effort text extraction |
+| HotNigerianJobs | `hotnigerianjobs` | HTML scrape (date pages) | `www.hotnigerianjobs.com/jobs/1day/` | None | Exact page date + `Posted on …` strings |
+| Jobzilla | `jobzilla` | HTML scrape | `www.jobzilla.ng/jobs` | None | Best-effort text extraction |
 | JSearch | `jsearch_api` | REST API | `jsearch.p.rapidapi.com` | RapidAPI key | Server-side `date_posted` filter + per-job timestamp |
 | Indeed RSS | `indeed_rss` | RSS feed | `www.indeed.com/rss` (sorted by date) | None | Real `pubDate` per item |
 | Adzuna | `adzuna_api` | REST API | `api.adzuna.com` (free: 250 calls/day) | App ID + Key | Server-side `max_days_old` + per-job `created` |

@@ -87,6 +87,8 @@ class JobSource(str, Enum):
     FUZU        = "fuzu"
     JOBGURUS    = "jobgurus"
     JOBBERMAN   = "jobberman"
+    HOTNIGERIANJOBS = "hotnigerianjobs"
+    JOBZILLA    = "jobzilla"
 
 
 # ─── Stage 1: Raw ─────────────────────────────────────────────────────────────

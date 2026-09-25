@@ -251,6 +251,17 @@ def _extract_posted_date(text: str, fetched_at: datetime | None = None) -> str |
     if m:
         return m.group(1)
 
+    # '24th Sep, 2026' / '3rd September 2026' (ordinal day, optional comma)
+    m = re.search(
+        r"(\d{1,2})(?:st|nd|rd|th)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*,?\s*(\d{4})",
+        text, re.IGNORECASE,
+    )
+    if m:
+        try:
+            return datetime(int(m.group(3)), _MONTHS[m.group(2).lower()[:3]], int(m.group(1))).date().isoformat()
+        except ValueError:
+            pass
+
     # '12 Sep 2026' / '12 September 2026'
     m = re.search(
         r"(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})",

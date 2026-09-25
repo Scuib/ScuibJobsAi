@@ -188,6 +188,9 @@ class _BaseHTMLIngester(BaseIngester):
         self.query = query
         self.location = location
         self.max_pages = max_pages
+        # Optional per-link posted dates (YYYY-MM-DD) filled by
+        # _fetch_job_links; forwarded into RawJob metadata.
+        self._link_dates: dict[str, str] = {}
         self._seen_ids: set[str] = seen_ids or set()
         self._timeout = request_timeout
         self._circuit_breaker = circuit_breaker or CircuitBreaker(
@@ -224,7 +227,11 @@ class _BaseHTMLIngester(BaseIngester):
                                 external_id=ext_id,
                                 raw_text=raw_text,
                                 source_url=url,
-                                metadata={"title": title, "query": self.query},
+                                metadata={
+                                    "title": title,
+                                    "query": self.query,
+                                    "posted_date": self._link_dates.get(url),
+                                },
                             )
                             await asyncio.sleep(0.5)
                         except Exception as e:
@@ -493,6 +500,198 @@ class JobbermanIngester(_BaseHTMLIngester):
                 content = el.get_text(separator="\n", strip=True)
                 break
 
+        if not content:
+            content = soup.get_text(separator="\n", strip=True)
+
+        title = soup.title.text.strip() if soup.title else ""
+        return f"Title: {title}\n\n{content}"
+
+
+_HNJ_MONTHS = {
+    "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+    "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+}
+
+
+def _parse_hnj_page_date(title: str) -> str | None:
+    """'961 Jobs Listed Yesterday 24 September 2026 - pg 1' → '2026-09-24'."""
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})", title or "")
+    if not m:
+        return None
+    month = _HNJ_MONTHS.get(m.group(2).lower()[:3])
+    if not month:
+        return None
+    try:
+        return f"{int(m.group(3)):04d}-{month}-{int(m.group(1)):02d}"
+    except ValueError:
+        return None
+
+
+class HotNigerianJobsIngester(_BaseHTMLIngester):
+    """
+    Scrapes HotNigerianJobs (hotnigerianjobs.com) — high-volume Nigerian
+    aggregator with date-organized listing pages.
+
+    Strategy: crawl /jobs/1day/ pages (newest first) and keyword-filter
+    client-side, since the site's own search is Google CSE (unusable).
+    Detail URLs look like /hotjobs/{id}/{slug}.html — the numeric id is
+    a perfect stable external_id. Page titles carry the exact listing
+    date ('... Listed Yesterday 24 September 2026').
+    """
+
+    SEARCH_URL = "https://www.hotnigerianjobs.com/jobs/1day/"
+
+    def __init__(self, query: str = "", max_pages: int = 3, **kwargs):
+        super().__init__(
+            source=JobSource.HOTNIGERIANJOBS,
+            query=query,
+            max_pages=max_pages,
+            **kwargs,
+        )
+        tokens = [t.lower() for t in query.split() if len(t) > 2]
+        self._tokens = tokens
+
+    def _matches(self, title: str) -> bool:
+        if not self._tokens:
+            return True
+        lowered = title.lower()
+        return any(tok in lowered for tok in self._tokens)
+
+    async def _fetch_job_links(self, client: httpx.AsyncClient, page: int) -> list[tuple[str, str]]:
+        url = self.SEARCH_URL if page == 1 else f"{self.SEARCH_URL}{page - 1}/"
+        response = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        response.raise_for_status()
+        html = response.text
+
+        soup = BeautifulSoup(html, "html.parser")
+        page_date = _parse_hnj_page_date(soup.title.text if soup.title else "")
+
+        links = []
+        for m in re.finditer(
+            r"<a\s+href='(https://www\.hotnigerianjobs\.com/hotjobs/(\d+)/[^']+\.html)'>([^<]+)</a>",
+            html,
+        ):
+            full_url, job_id, title = m.group(1), m.group(2), m.group(3).strip()
+            if len(title) < 5 or not self._matches(title):
+                continue
+            if page_date:
+                self._link_dates[full_url] = page_date
+            links.append((title, full_url))
+
+        # Dedupe while preserving order
+        seen: set[str] = set()
+        unique = []
+        for title, link in links:
+            if link not in seen:
+                seen.add(link)
+                unique.append((title, link))
+        return unique
+
+    async def _fetch_detail(self, client: httpx.AsyncClient, url: str) -> str:
+        response = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        content = ""
+        for selector in ["entry-content", "post-content", "job-details", "content", "main", "article"]:
+            el = soup.find(class_=selector) or (soup.find("article") if selector == "article" else None)
+            if el:
+                content = el.get_text(separator="\n", strip=True)
+                break
+
+        if not content:
+            content = soup.get_text(separator="\n", strip=True)
+
+        title = soup.title.text.strip() if soup.title else ""
+        posted = ""
+        m = re.search(r"Posted on ([A-Za-z]+ \d{1,2}[a-z]{2} [A-Za-z]+,? \d{4})", content)
+        if m:
+            posted = f"Posted: {m.group(1)}\n"
+        return f"Title: {title}\n{posted}\n{content}"
+
+
+class JobzillaIngester(_BaseHTMLIngester):
+    """
+    Scrapes Jobzilla (jobzilla.ng) — Nigerian board with city-level
+    filtering. Listing at /jobs (WordPress /page/N/ pagination),
+    details at /jobs/{slug}-{id}.
+    """
+
+    SEARCH_URL = "https://www.jobzilla.ng/jobs"
+
+    def __init__(self, query: str = "", max_pages: int = 3, **kwargs):
+        super().__init__(
+            source=JobSource.JOBZILLA,
+            query=query,
+            max_pages=max_pages,
+            **kwargs,
+        )
+        tokens = [t.lower() for t in query.split() if len(t) > 2]
+        self._tokens = tokens
+
+    def _matches(self, title: str) -> bool:
+        if not self._tokens:
+            return True
+        lowered = title.lower()
+        return any(tok in lowered for tok in self._tokens)
+
+    async def _fetch_job_links(self, client: httpx.AsyncClient, page: int) -> list[tuple[str, str]]:
+        url = self.SEARCH_URL if page == 1 else f"{self.SEARCH_URL}/page/{page}/"
+        response = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            text = a.text.strip()
+            if len(text) < 5:
+                continue
+            # Detail pages end with -{id}; skip section/category links
+            m = re.match(r"^(?:https://www\.jobzilla\.ng)?(/jobs/.+-(\d+)/?)$", href)
+            if not m or href.rstrip("/") == "/jobs":
+                continue
+            full_url = href if href.startswith("http") else f"https://www.jobzilla.ng{href}"
+            if not self._matches(text):
+                continue
+            links.append((text, full_url))
+
+        seen: set[str] = set()
+        unique = []
+        for title, link in links:
+            if link not in seen:
+                seen.add(link)
+                unique.append((title, link))
+        return unique
+
+    async def _fetch_detail(self, client: httpx.AsyncClient, url: str) -> str:
+        response = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        content = ""
+        for selector in ["entry-content", "post-content", "job-content", "content", "main"]:
+            el = soup.find(class_=selector)
+            if el:
+                content = el.get_text(separator="\n", strip=True)
+                break
+
+        if not content:
+            article = soup.find("article")
+            if article:
+                content = article.get_text(separator="\n", strip=True)
         if not content:
             content = soup.get_text(separator="\n", strip=True)
 

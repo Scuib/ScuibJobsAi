@@ -23,6 +23,8 @@ from ingestion.custom_ingesters import (
     FuzuIngester,
     JobGurusIngester,
     JobbermanIngester,
+    HotNigerianJobsIngester,
+    JobzillaIngester,
 )
 from core.models import JobSource
 from parsing.gemini_parser import GeminiParser
@@ -173,6 +175,16 @@ def build_dynamic_aggregator(
         for query in queries:
             ingesters.append(JobbermanIngester(query=query))
 
+    # 9. HotNigerianJobs (high-volume Nigerian aggregator, date pages)
+    if JobSource.HOTNIGERIANJOBS in sources:
+        for query in queries:
+            ingesters.append(HotNigerianJobsIngester(query=query))
+
+    # 10. Jobzilla (Nigerian board, city-level listings)
+    if JobSource.JOBZILLA in sources:
+        for query in queries:
+            ingesters.append(JobzillaIngester(query=query))
+
     # Balance: split the target evenly across distinct sources so the
     # fastest board can't eat the whole quota before slow ones deliver.
     distinct_sources = {s.value for s in sources} or {"default"}
@@ -203,13 +215,15 @@ def _build_ingester():
     locations_raw = os.getenv("INGEST_LOCATIONS", "Nigeria")
     locations = [l.strip() for l in locations_raw.split(",") if l.strip()]
 
-    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,fuzu,jobgurus,jobberman,jsearch_api,indeed_rss,adzuna_api")
+    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,hotnigerianjobs,jobzilla,jsearch_api,adzuna_api")
     source_map = {
         "workable": JobSource.WORKABLE,
         "myjobmag": JobSource.MYJOBMAG,
         "fuzu": JobSource.FUZU,
         "jobgurus": JobSource.JOBGURUS,
         "jobberman": JobSource.JOBBERMAN,
+        "hotnigerianjobs": JobSource.HOTNIGERIANJOBS,
+        "jobzilla": JobSource.JOBZILLA,
         "jsearch_api": JobSource.JSEARCH_API,
         "indeed_rss": JobSource.INDEED_RSS,
         "adzuna_api": JobSource.ADZUNA_API,
