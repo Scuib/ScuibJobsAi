@@ -4,11 +4,6 @@ Thumbs.db
 *.ini
 
 # === IDEs and Editors ===
-.vscode/
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
 .idea/
 *.suo
 *.ntvs*
@@ -95,3 +90,7 @@ dist/
 *.log
 *.sqlite3
 *.db
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

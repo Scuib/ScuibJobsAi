@@ -110,31 +110,31 @@ def build_dynamic_aggregator(
         adzuna_key = os.getenv("ADZUNA_APP_KEY")
         if adzuna_id and adzuna_key:
             pages = int(os.getenv("ADZUNA_PAGES", "5"))
-                for query in queries:
-                    for location in locations:
-                        # Determine country from location if possible, default to us
-                        country = "us"
-                        loc_lower = location.lower()
-                        if "united kingdom" in loc_lower or "uk" in loc_lower:
-                            country = "gb"
-                        elif "canada" in loc_lower or "ca" in loc_lower:
-                            country = "ca"
-                        elif "australia" in loc_lower or "au" in loc_lower:
-                            country = "au"
-                        elif "germany" in loc_lower or "de" in loc_lower:
-                            country = "de"
+            for query in queries:
+                for location in locations:
+                    # Determine country from location if possible, default to us
+                    country = "us"
+                    loc_lower = location.lower()
+                    if "united kingdom" in loc_lower or "uk" in loc_lower:
+                        country = "gb"
+                    elif "canada" in loc_lower or "ca" in loc_lower:
+                        country = "ca"
+                    elif "australia" in loc_lower or "au" in loc_lower:
+                        country = "au"
+                    elif "germany" in loc_lower or "de" in loc_lower:
+                        country = "de"
 
-                        # Adzuna has no Nigeria index — querying the US index
-                        # with where=Nigeria returns ~nothing and burns the
-                        # 250 calls/day free quota. Skip instead.
-                        if "nigeria" in loc_lower:
-                            print(
-                                "WARNING: Adzuna has no Nigeria index — "
-                                f"skipping adzuna for location '{location}'."
-                            )
-                            continue
+                    # Adzuna has no Nigeria index — querying the US index
+                    # with where=Nigeria returns ~nothing and burns the
+                    # 250 calls/day free quota. Skip instead.
+                    if "nigeria" in loc_lower:
+                        print(
+                            "WARNING: Adzuna has no Nigeria index — "
+                            f"skipping adzuna for location '{location}'."
+                        )
+                        continue
 
-                        ingesters.append(AdzunaIngester(
+                    ingesters.append(AdzunaIngester(
                         app_id=adzuna_id,
                         app_key=adzuna_key,
                         query=query,
