@@ -1,0 +1,60 @@
+# Render Blueprint — ScuibJobsAi pipeline API.
+#
+# WARNING: only use this to create a NEW service (Dashboard > New >
+# Blueprint, pointing at this repo). If the production service already
+# exists (created manually in the dashboard), do NOT apply this file —
+# it would spin up a second, duplicate service. For an existing
+# service, keep managing env vars in the dashboard; CI still applies.
+#
+# Secrets use `sync: false` so Render never overwrites dashboard values
+# from this file — set them once in the dashboard and they stay there.
+
+services:
+  - type: web
+    name: scuibjobsai
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true # push to main redeploys automatically
+    envVars:
+      # ── Secrets (set in dashboard; never overwritten) ──────────────
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: HANDOFF_ENDPOINT_URL
+        sync: false
+      - key: HANDOFF_API_KEY
+        sync: false
+      - key: JSEARCH_API_KEY
+        sync: false
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      # ── Safe defaults (applied from this file) ─────────────────────
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: INGEST_LOCATIONS
+        value: Nigeria
+      - key: INGEST_SOURCES
+        value: workable,myjobmag,fuzu,jobgurus,jobberman
+      - key: TARGET_JOB_COUNT
+        value: 200
+      - key: REQUIRE_APPLICATION_LINK
+        value: true
+      - key: MAX_JOB_AGE_DAYS
+        value: 0
+      - key: FETCH_TIMEOUT_SECONDS
+        value: 600
+      - key: MAX_CONCURRENT_PARSES
+        value: 15
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash

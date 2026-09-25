@@ -1,0 +1,29 @@
+name: CI
+
+# Runs on every push and pull request: install, compile-check,
+# then the offline smoke test (no network, keys, or DB needed).
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile check
+        run: python -m compileall -q api core ingestion parsing validation store handoff main.py scripts/smoke_test.py
+
+      - name: Offline smoke test
+        run: python scripts/smoke_test.py

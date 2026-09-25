@@ -12,14 +12,15 @@ uvicorn main:app --reload
 
 ## Test
 
-No test framework configured. Two standalone test scripts:
+No test framework configured. Standalone test scripts (raw `assert`):
 
 ```bash
-python scripts/phase1_test.py     # single job: manual paste → LLM parse → handoff
-python scripts/bulk_test.py       # hermetic: dedup, circuit breaker, full pipeline + optional real Gemini
+python scripts/smoke_test.py  # offline CI gate: models, parsers, aggregator, gates, HTTP API (no network/keys/DB)
+python scripts/phase1_test.py # single job: manual paste → LLM parse → handoff
+python scripts/bulk_test.py   # hermetic: dedup, circuit breaker, full pipeline + optional real Gemini
 ```
 
-`bulk_test.py` test 4 (real Gemini) is skipped when `GEMINI_API_KEY` is unset — not a failure.
+`bulk_test.py` test 4 (real Gemini) is skipped when `GEMINI_API_KEY` is unset — not a failure. GitHub Actions (`.github/workflows/ci.yml`) runs compileall + `smoke_test.py` on push/PR. `render.yaml` is a Blueprint for NEW services only — never apply to the existing dashboard service (would duplicate it).
 
 ## Architecture
 
