@@ -172,10 +172,17 @@ def build_dynamic_aggregator(
         f"{len(distinct_sources)} sources -> max_per_source={max_per_source}"
     )
 
+    # Fetch timeout: hanging boards must not stall parse+handoff forever.
+    try:
+        fetch_timeout = float(os.getenv("FETCH_TIMEOUT_SECONDS", "600"))
+    except ValueError:
+        fetch_timeout = 600.0
+
     return MultiSourceAggregator(
         ingesters=ingesters,
         target_count=target_count,
         max_per_source=max_per_source,
+        fetch_timeout_seconds=fetch_timeout if fetch_timeout > 0 else None,
     )
 
 

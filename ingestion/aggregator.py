@@ -39,11 +39,17 @@ class MultiSourceAggregator(BaseIngester):
     drain FIFO until the target is met. Result: every live source is
     represented, and slow sources aren't starved by fast ones.
 
+    Fetch timeout: the fetch phase ends when ALL sources finish OR when
+    `fetch_timeout_seconds` elapses — whichever comes first. Without this,
+    one hanging board stalls parse+handoff for the whole run (and on
+    free hosting the instance can sleep first, delivering zero jobs).
+
     Usage:
         aggregator = MultiSourceAggregator(
             ingesters=[jsearch, indeed, adzuna],
             target_count=200,
             max_per_source=70,
+            fetch_timeout_seconds=600,
         )
         async for raw_job in aggregator.fetch():
             # Unique, source-balanced jobs
@@ -56,11 +62,13 @@ class MultiSourceAggregator(BaseIngester):
         target_count: int = 200,
         dedup_by_fingerprint: bool = True,
         max_per_source: int | None = None,
+        fetch_timeout_seconds: float | None = None,
     ):
         self.ingesters = ingesters
         self.target_count = target_count
         self.dedup_by_fingerprint = dedup_by_fingerprint
         self.max_per_source = max_per_source
+        self.fetch_timeout_seconds = fetch_timeout_seconds
 
         # Dedup state
         self._seen_external_ids: set[str] = set()
@@ -121,10 +129,30 @@ class MultiSourceAggregator(BaseIngester):
             )
             tasks.append(task)
 
-        # Consume from the shared queue
+        # Consume from the shared queue. Stops when all sources are done
+        # OR when the fetch timeout elapses (stalled boards must not hold
+        # parse+handoff hostage — we proceed with whatever arrived).
+        import time
+        deadline = (
+            time.monotonic() + self.fetch_timeout_seconds
+            if self.fetch_timeout_seconds
+            else None
+        )
+        timed_out = False
         sentinels_received = 0
         while sentinels_received < active_sources:
-            item = await queue.get()
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    break
+            else:
+                item = await queue.get()
 
             if item is None:
                 sentinels_received += 1
@@ -176,6 +204,14 @@ class MultiSourceAggregator(BaseIngester):
             self.per_source_counts[source_key] += 1
             self.total_yielded += 1
             yield item
+
+        if timed_out:
+            logger.warning(
+                f"Aggregator: fetch timeout ({self.fetch_timeout_seconds}s) hit with "
+                f"{sentinels_received}/{active_sources} sources finished — "
+                f"proceeding with {self.total_yielded} jobs + "
+                f"{len(self._overflow)} buffered"
+            )
 
         # Cancel any still-running tasks
         for task in tasks:

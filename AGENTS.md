@@ -55,7 +55,7 @@ ingestion/ → parsing/ → validation/ → store/ → handoff/
 | Adzuna API | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` | Free tier: 250 calls/day, 50/page |
 | Manual | None | Paste raw text via API |
 
-`MultiSourceAggregator` (`ingestion/aggregator.py`) runs all sources concurrently, deduplicates by external_id + content fingerprint, stops at `target_count`. Per-source balance caps (`max_per_source` = target ÷ distinct sources, set in `build_dynamic_aggregator`): capped-out boards buffer overflow and drain FIFO after all sources finish, so fast boards can't starve slow ones.
+`MultiSourceAggregator` (`ingestion/aggregator.py`) runs all sources concurrently, deduplicates by external_id + content fingerprint, stops at `target_count`. Per-source balance caps (`max_per_source` = target ÷ distinct sources, set in `build_dynamic_aggregator`): capped-out boards buffer overflow and drain FIFO after all sources finish, so fast boards can't starve slow ones. Fetch phase ends when all sources finish OR `FETCH_TIMEOUT_SECONDS` (default 600) elapses — hanging boards are abandoned and the run proceeds with what arrived.
 
 ## Notes
 
