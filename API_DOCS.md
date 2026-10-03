@@ -532,7 +532,7 @@ GET /jobs?status=parsed                    → Jobs held back by safety gates �
 
 > Same free-hosting caveat as `/jobs/stats`: this history lives in memory and resets on sleep/restart.
 
-**`store_errors` / `store_error_detail`:** swallowed database failures by operation (e.g. `{"get_stats": 1}`) and the last error message for each. Nonzero values mean runs *look* successful while data is being lost — the classic symptom is empty `GET /jobs`. The most common root cause is the Supabase tables never having been created: run `scripts/supabase_init.sql` in the Supabase SQL Editor.
+**`store_errors` / `store_error_detail`:** swallowed database failures by operation (e.g. `{"get_stats": 1}`) and the last error message for each. Nonzero values mean runs *look* successful while data is being lost — the classic symptom is empty `GET /jobs`. Read the detail message: `Name or service not known` = `SUPABASE_URL` points at an unresolvable hostname (placeholder/typo/deleted project), `relation ... does not exist` = tables never created (run `scripts/supabase_init.sql` in the Supabase SQL Editor), permission/RLS errors = wrong key.
 
 ---
 

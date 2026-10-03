@@ -12,7 +12,6 @@ Thumbs.db
 *.swp
 
 # === Environment Variables & Secrets (CRITICAL) ===
-.env
 .env.[a-zA-Z]*
 !.env.example
 secrets.yaml
@@ -98,3 +97,4 @@ temp_interactive_push.bat
 # === Cloudflare CLI cache ===
 .cloudflare/
 node_modules/
+config.bat
