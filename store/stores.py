@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 # A nonzero value here means data is being lost (missing tables, schema
 # drift, RLS denials) while runs still report success.
 STORE_FAILURES: Counter = Counter()
+# Last error message per operation (truncated) — root-cause visibility.
+STORE_LAST_ERRORS: dict[str, str] = {}
+
+
+def _record_store_failure(op: str, err: Exception) -> None:
+    STORE_FAILURES[op] += 1
+    STORE_LAST_ERRORS[op] = str(err)[:300]
 
 _SQL_DDL = """
 CREATE TABLE IF NOT EXISTS raw_jobs (
@@ -143,52 +150,20 @@ class SupabaseStore(BaseStore):
     """
     Persists jobs to Supabase using the supabase-py client.
 
-    Required tables — run this SQL in your Supabase project:
+    Required tables: run `scripts/supabase_init.sql` once in the Supabase
+    SQL Editor (idempotent; it is the source of truth for the schema).
+    Tables are raw_jobs (id, source, external_id, raw_text, source_url,
+    fetched_at, metadata) and parsed_jobs (id → raw_jobs, status, source,
+    job_title, company, location, remote, salary, required_skills,
+    preferred_skills, years_experience, education_level, employment_type,
+    description_clean, source_url, application_link, posted_date TEXT,
+    model_used, confidence, parse_warnings, validation_issues, parsed_at)
+    plus indexes on parsed_jobs(status), parsed_jobs(parsed_at DESC) and
+    raw_jobs(external_id).
 
-    CREATE TABLE raw_jobs (
-        id           UUID PRIMARY KEY,
-        source       TEXT NOT NULL,
-        external_id  TEXT,
-        raw_text     TEXT NOT NULL,
-        source_url   TEXT,
-        fetched_at   TIMESTAMPTZ DEFAULT NOW(),
-        metadata     JSONB DEFAULT '{}'
-    );
-
-    CREATE TABLE parsed_jobs (
-        id                UUID PRIMARY KEY,
-        raw_id            UUID REFERENCES raw_jobs(id),
-        status            TEXT NOT NULL DEFAULT 'parsed',
-        source            TEXT,
-        job_title         TEXT NOT NULL,
-        company           TEXT,
-        location          TEXT,
-        remote            BOOLEAN DEFAULT FALSE,
-        salary            JSONB,
-        required_skills   TEXT[] DEFAULT '{}',
-        preferred_skills  TEXT[] DEFAULT '{}',
-        years_experience  INTEGER,
-        education_level   TEXT,
-        employment_type   TEXT,
-        description_clean TEXT,
-        source_url        TEXT,
-        application_link  TEXT,
-        posted_date       DATE,
-        model_used        TEXT,
-        confidence        FLOAT DEFAULT 1.0,
-        parse_warnings    TEXT[] DEFAULT '{}',
-        validation_issues TEXT[] DEFAULT '{}',
-        parsed_at         TIMESTAMPTZ DEFAULT NOW()
-    );
-
-    CREATE INDEX parsed_jobs_status_idx ON parsed_jobs(status);
-
-    If the table already exists, run this migration:
-
-    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS source TEXT;
-    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS source_url TEXT;
-    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS application_link TEXT;
-    ALTER TABLE parsed_jobs ADD COLUMN IF NOT EXISTS posted_date DATE;
+    If the tables are missing, every operation here fails soft: runs still
+    report success but data is lost (watch GET /metrics -> store_errors /
+    store_error_detail).
     """
 
     def __init__(self, url: str, key: str):
@@ -206,7 +181,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_raw failed: {e}")
-            STORE_FAILURES["save_raw"] += 1
+            _record_store_failure("save_raw", e)
         return job.id
 
     async def save_parsed(self, job: ParsedJob) -> str:
@@ -220,7 +195,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_parsed failed: {e}")
-            STORE_FAILURES["save_parsed"] += 1
+            _record_store_failure("save_parsed", e)
         return job.id
 
     async def update_status(self, job_id: str, status: JobStatus, notes: str = "") -> None:
@@ -273,7 +248,7 @@ class SupabaseStore(BaseStore):
             return [ParsedJob(**row) for row in (result.data or [])]
         except Exception as e:
             logger.error(f"Supabase get_all_jobs failed: {e}")
-            STORE_FAILURES["get_all_jobs"] += 1
+            _record_store_failure("get_all_jobs", e)
         return []
 
     async def get_jobs_count(self, status: str | None = None) -> int:
@@ -290,7 +265,7 @@ class SupabaseStore(BaseStore):
             return result.count or 0
         except Exception as e:
             logger.error(f"Supabase get_jobs_count failed: {e}")
-            STORE_FAILURES["get_jobs_count"] += 1
+            _record_store_failure("get_jobs_count", e)
         return 0
 
     # ─── Batch operations (enterprise) ────────────────────────────────────────
@@ -308,7 +283,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_raw_batch failed: {e}")
-            STORE_FAILURES["save_raw_batch"] += 1
+            _record_store_failure("save_raw_batch", e)
         return [job.id for job in jobs]
 
     async def save_parsed_batch(self, jobs: list[ParsedJob]) -> list[str]:
@@ -324,7 +299,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_parsed_batch failed: {e}")
-            STORE_FAILURES["save_parsed_batch"] += 1
+            _record_store_failure("save_parsed_batch", e)
         return [job.id for job in jobs]
 
     async def exists_by_external_id(self, external_id: str) -> bool:
@@ -342,7 +317,7 @@ class SupabaseStore(BaseStore):
             return bool(result.data)
         except Exception as e:
             logger.error(f"Supabase exists_by_external_id failed: {e}")
-            STORE_FAILURES["exists_by_external_id"] += 1
+            _record_store_failure("exists_by_external_id", e)
         return False
 
     async def get_stats(self) -> dict:
@@ -379,7 +354,7 @@ class SupabaseStore(BaseStore):
             }
         except Exception as e:
             logger.error(f"Supabase get_stats failed: {e}")
-            STORE_FAILURES["get_stats"] += 1
+            _record_store_failure("get_stats", e)
             return {
                 "total_raw": 0,
                 "total_parsed": 0,

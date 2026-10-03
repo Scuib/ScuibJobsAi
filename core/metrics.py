@@ -28,10 +28,14 @@ class RunMetrics:
     flagged: int = 0
     errors: int = 0
     duplicates: int = 0
-    skipped: int = 0  # parsed but not handed off (e.g. no application link)
+    skipped: int = 0  # parsed but not handed off (total of the two below)
+    skipped_no_link: int = 0  # no application URL (brand-safety gate)
+    skipped_stale: int = 0    # posted_date older than max age gate
 
     # Per-source breakdown
     per_source: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    # Fetch-stage failures by source (boards that errored during the run)
+    fetch_errors: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
     # Parse latencies in seconds
     parse_latencies: list[float] = field(default_factory=list)
@@ -80,7 +84,10 @@ class RunMetrics:
             "errors": self.errors,
             "duplicates": self.duplicates,
             "skipped": self.skipped,
+            "skipped_no_link": self.skipped_no_link,
+            "skipped_stale": self.skipped_stale,
             "per_source": dict(self.per_source),
+            "fetch_errors": dict(self.fetch_errors),
             "latency": self.latency_percentiles(),
         }
 

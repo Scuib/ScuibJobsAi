@@ -223,8 +223,11 @@ class IngestionStats(BaseModel):
     total_flagged:     int = 0
     total_errors:      int = 0
     total_duplicates:  int = 0
-    total_skipped:     int = 0   # parsed but not handed off (e.g. no application link)
+    total_skipped:     int = 0   # parsed but not handed off (total of the two below)
+    total_skipped_no_link: int = 0  # no application URL
+    total_skipped_stale:   int = 0  # posted_date older than max age gate
     per_source:        dict[str, int] = Field(default_factory=dict)
+    fetch_errors:      dict[str, int] = Field(default_factory=dict)
     duration_seconds:  float = 0.0
     jobs_per_second:   float = 0.0
 
@@ -254,6 +257,21 @@ class BulkIngestionRequest(BaseModel):
         default="week",
         description="Recency filter: today | 3days | week | month",
     )
+    require_application_link: bool | None = Field(
+        default=None,
+        description=(
+            "Override REQUIRE_APPLICATION_LINK for this run: when true, jobs "
+            "without an application URL are never handed off. None = use env default."
+        ),
+    )
+    max_age_days: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Override MAX_JOB_AGE_DAYS for this run: dated jobs older than N days "
+            "are not handed off (0 = no limit). None = use env default."
+        ),
+    )
 
 
 class IngestionRunStatus(BaseModel):
@@ -265,7 +283,10 @@ class IngestionRunStatus(BaseModel):
     errors:     int = 0
     duplicates: int = 0
     skipped:    int = 0
+    skipped_no_link: int = 0
+    skipped_stale:   int = 0
     per_source: dict[str, int] = Field(default_factory=dict)
+    fetch_errors: dict[str, int] = Field(default_factory=dict)
     message:    str = ""
 
 

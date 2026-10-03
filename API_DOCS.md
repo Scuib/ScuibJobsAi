@@ -54,12 +54,12 @@ Here is what happens at each station, in plain language:
 4. **Validate.** Automated rules check the extracted data (is there a title? any skills? sane salary? an apply link? a posted date?). Problems are recorded as `validation_issues` on the job — they are informational annotations, they never block the pipeline by themselves.
 5. **Auto Handoff.** Every parsed job is immediately POSTed to the downstream matching algorithm (`HANDOFF_ENDPOINT_URL`, i.e. Anthony's `POST /api/jobs/ingest/`). Two safety gates can hold a job back (see below); everything else flows straight through. No human clicks anything.
 
-**The two safety gates** (both configured with environment variables):
+**The two safety gates** (configured with environment variables, overridable per run via the `require_application_link` / `max_age_days` request fields on `POST /ingest/bulk` — pin them in the cron body so behavior doesn't depend on dashboard env vars):
 
 - **Apply-link gate** (`REQUIRE_APPLICATION_LINK`, default `true`). Jobs with no apply URL are parsed and stored but **never handed off**. A job users can't apply to never reaches the site — this protects the brand.
-- **Freshness gate** (`MAX_JOB_AGE_DAYS`, default `1` = today only). Dated jobs older than N days are parsed and stored but **never handed off**. Jobs with an unknown posted date are always kept (the pipeline never punishes a job for missing data). Set `0` to disable and hand off everything with dates recorded.
+- **Freshness gate** (`MAX_JOB_AGE_DAYS`, default `1` = today only). Dated jobs must be *strictly younger* than N days (day precision): `1` = today only, `2` = today + yesterday. Jobs that fail are parsed and stored but **never handed off**. Jobs with an unknown posted date are always kept (the pipeline never punishes a job for missing data). Set `0` to disable and hand off everything with dates recorded.
 
-Jobs held back by a gate stay in status `parsed` (visible via `GET /jobs?status=parsed`) and are counted as `skipped` in run statistics — they are not errors. Jobs whose parsing completely failed (`[PARSE FAILED]`) are likewise never handed off.
+Jobs held back by a gate stay in status `parsed` (visible via `GET /jobs?status=parsed`) and are counted in run statistics as `skipped`, split into `skipped_no_link` and `skipped_stale` — they are not errors. Jobs whose parsing completely failed (`[PARSE FAILED]`) are likewise never handed off.
 
 ---
 
@@ -207,6 +207,8 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 | `target_count` | `integer` | `200` | Stop fetching after this many unique jobs (range 1–2000). **Keep this small on free hosting** (50–80): a 200-target run with HTML scraping can take longer than the platform's idle timeout and get killed mid-run. The target is split evenly per board (target ÷ distinct sources), so fast boards can't starve slow ones — capped boards buffer extras and drain them after all boards finish. |
 | `remote_only` | `boolean` | `false` | If `true`, only fetch remote/work-from-home jobs. Only meaningful for JSearch. |
 | `date_posted` | `string` | `"week"` | Recency window, enforced server-side by JSearch, Adzuna, and DelonJobs. Options: `today`, `3days`, `week`, `month`. Use `"today"` for same-day-only runs (matches the default `MAX_JOB_AGE_DAYS=1` gate). |
+| `require_application_link` | `boolean` | `null` (env default) | Per-run override of `REQUIRE_APPLICATION_LINK`. `true` = jobs with no apply URL are never handed off. Pin this in the cron body so brand safety doesn't depend on dashboard env vars. |
+| `max_age_days` | `integer` | `null` (env default) | Per-run override of `MAX_JOB_AGE_DAYS`. Dated jobs must be younger than N days to be handed off (`1` = today only); `0` = no age limit. Pin `1` in the cron body for same-day freshness regardless of dashboard env. |
 
 **Response (returns immediately — the run continues in the background):**
 
@@ -244,11 +246,14 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
   "errors": 0,
   "duplicates": 12,
   "skipped": 0,
+  "skipped_no_link": 0,
+  "skipped_stale": 0,
   "per_source": {
     "workable": 40,
     "myjobmag": 30,
     "fuzu": 15
   },
+  "fetch_errors": {},
   "message": "Ingestion run is currently active and processing."
 }
 ```
@@ -266,12 +271,17 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
   "errors": 5,
   "duplicates": 30,
   "skipped": 12,
+  "skipped_no_link": 7,
+  "skipped_stale": 5,
   "per_source": {
     "workable": 80,
     "myjobmag": 60,
     "fuzu": 30,
     "jobgurus": 15,
     "jobberman": 15
+  },
+  "fetch_errors": {
+    "jobzilla": 2
   },
   "message": "Ingestion run completed successfully."
 }
@@ -286,8 +296,11 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 | `parsed` | Jobs the AI (or fallback) processed | Close to `fetched` at the end |
 | `errors` | Parse crashes + failed handoffs | `0`, or small with a clear cause in logs |
 | `duplicates` | Already-seen jobs filtered out | Non-zero is *good* — dedup working |
-| `skipped` | Parsed but deliberately not handed off (no apply link / too old / parse failed) | `0`–moderate; high values mean check the safety gates |
+| `skipped` | Parsed but deliberately not handed off (total of the two fields below) | `0`–moderate; high values mean check the safety gates |
+| `skipped_no_link` | Skipped by the apply-link gate (no `application_link` / `source_url`) | Dominant skip reason = boards aren't giving apply URLs |
+| `skipped_stale` | Skipped by the freshness gate (posted_date older than `max_age_days`) | Dominant skip reason = sources serving old listings |
 | `per_source` | Yielded jobs per board | Matches the boards you asked for; a missing board likely timed out — check server logs |
+| `fetch_errors` | Fetch-stage failures per board (exceptions during scraping) | `{}`; a board listed here threw during fetch — its 0 yield is explained |
 
 **Error:** Returns `404` if the run ID is unknown (never existed, or expired from memory after a restart).
 
@@ -506,13 +519,20 @@ GET /jobs?status=parsed                    → Jobs held back by safety gates �
       "errors": 5,
       "duplicates": 30,
       "skipped": 12,
-      "per_source": {"workable": 100, "myjobmag": 100}
+      "skipped_no_link": 7,
+      "skipped_stale": 5,
+      "per_source": {"workable": 100, "myjobmag": 100},
+      "fetch_errors": {"jobzilla": 2}
     }
-  ]
+  ],
+  "store_errors": {},
+  "store_error_detail": {}
 }
 ```
 
 > Same free-hosting caveat as `/jobs/stats`: this history lives in memory and resets on sleep/restart.
+
+**`store_errors` / `store_error_detail`:** swallowed database failures by operation (e.g. `{"get_stats": 1}`) and the last error message for each. Nonzero values mean runs *look* successful while data is being lost — the classic symptom is empty `GET /jobs`. The most common root cause is the Supabase tables never having been created: run `scripts/supabase_init.sql` in the Supabase SQL Editor.
 
 ---
 
@@ -534,6 +554,7 @@ This section is for Anthony. Every qualifying job is POSTed as JSON to `HANDOFF_
 | `employment_type` | `string \| null` | `full-time`, `contract`, `part-time`, … |
 | `description` | `string \| null` | AI-cleaned 2–3 sentence summary. |
 | `application_link` | `string \| null` | **Where the user clicks to apply** (direct apply URL, falling back to the board posting URL). With the default safety gate on, this is always present. **Needs a matching column on the ingested-job model** so it can be stored and returned to the frontend. |
+| `application_url` | `string \| null` | Alias of `application_link`, sent for downstream backends that expect this name — set it to the same value (or `source_url` as fallback). Store whichever name your model uses. |
 | `source_url` | `string \| null` | Original board posting URL. |
 | `posted_date` | `string \| null` | Board-posted date as `YYYY-MM-DD`. **Needs a matching column** — this powers the 24h / 1 week / 1 month filter toggles in the UI. |
 | `submitted_at` | `string (ISO 8601)` | When our pipeline handed the job off. |
@@ -626,7 +647,7 @@ Every job carries `posted_date` (`YYYY-MM-DD`) from the board when it can be det
 Two knobs control date behavior:
 
 - **`date_posted`** (per bulk request: `today` / `3days` / `week` / `month`) — enforced *server-side by JSearch and Adzuna only*. Use a wide window (`month`) when you want everything with dates recorded.
-- **`MAX_JOB_AGE_DAYS`** (env, default `1` = today only) — dated jobs older than N days are held back at handoff (counted as `skipped`). Dateless jobs are always kept. Set `0` to disable.
+- **`MAX_JOB_AGE_DAYS`** (env, default `1` = today only) — dated jobs must be younger than N days at handoff (counted as `skipped_stale`). Dateless jobs are always kept. Set `0` to disable.
 
 For the user-facing **24h / 1 week / 1 month toggles**: filter on the stored `posted_date` (falling back to ingestion time when null). That filtering lives on Anthony's backend once the `posted_date` column exists there.
 
@@ -655,7 +676,9 @@ export default {
             sources: ["workable", "myjobmag", "hotnigerianjobs", "jobzilla", "delonjobs", "jsearch_api"],
             target_count: 60,
             remote_only: false,
-            date_posted: "today"
+            date_posted: "today",
+            require_application_link: true,
+            max_age_days: 1
           })
         });
         const data = await resp.json().catch(() => ({}));
@@ -686,6 +709,7 @@ export default {
 - **Dev-first queries + small target (60):** every query × source combo spawns fetchers, and HTML boards scrape detail pages one by one. A big target can outlive free-tier idle timeouts and die mid-run. Small runs finish in minutes; queries are dev-focused so developer jobs win the per-source balance caps.
 - **`locations: ["Nigeria"]`:** strictly Nigerian feed. (Global `"remote"` listings are overwhelmingly foreign; remote *Nigerian* jobs still arrive via the Nigerian boards with `remote: true`.)
 - **`date_posted: "today"`:** same-day-only at the source (JSearch, Adzuna, DelonJobs enforce it); the `MAX_JOB_AGE_DAYS=1` gate holds back anything older downstream. The stored `posted_date` still powers the UI's 24h/1wk/1mo toggles.
+- **`require_application_link: true` + `max_age_days: 1`:** both gates pinned *in the request body* so brand safety and freshness hold even if someone later changes the server's env vars (or if `REQUIRE_APPLICATION_LINK` was ever set to `false` in the dashboard).
 
 **How to verify a cron run actually delivered jobs** (in order of reliability):
 
@@ -709,13 +733,13 @@ Copy `.env.example` to `.env` locally; set the same keys in the Render dashboard
 | `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL` | No | `gemini-2.0-flash` / `gemini-2.5-pro` | Primary and fallback Gemini models. |
 | `HANDOFF_ENDPOINT_URL` | Yes (prod) | — | Where parsed jobs are POSTed. Production: `https://backend-api-4p3k.onrender.com/api/jobs/ingest/`. **If unset, jobs are written to a local file and never reach Anthony's database** — the #1 cause of "cron succeeds but DB is empty". |
 | `HANDOFF_API_KEY` | No | — | Bearer token sent with handoff POSTs, if the downstream requires auth. |
-| `SUPABASE_URL` / `SUPABASE_KEY` | Strongly recommended (prod) | — | Persistent staging store. Without these, everything lives in memory and **wipes on every sleep/restart** (stats, dedup history, everything). Tables must be created first — DDL is in `store/stores.py`. |
+| `SUPABASE_URL` / `SUPABASE_KEY` | Strongly recommended (prod) | — | Persistent staging store. Without these, everything lives in memory and **wipes on every sleep/restart** (stats, dedup history, everything). Tables must be created first — run `scripts/supabase_init.sql` once in the Supabase SQL Editor. |
 | `INGEST_QUERIES` / `INGEST_LOCATIONS` | No | role list / `Nigeria` | Server-side defaults used by `POST /ingest/trigger`. The bulk endpoint takes these per-request instead. |
 | `INGEST_SOURCES` | No | all 8 boards | Server-side default source list for `/ingest/trigger`. |
 | `TARGET_JOB_COUNT` | No | `500` | Server-side default target for `/ingest/trigger`. |
 | `JSEARCH_API_KEY` / `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | No | — | Enable the JSearch/Adzuna API sources. Without keys those sources are skipped with a warning. |
-| `REQUIRE_APPLICATION_LINK` | No | `true` | `true` = hold back jobs with no apply URL (recommended — brand safety). Set `false` to hand off everything. |
-| `MAX_JOB_AGE_DAYS` | No | `1` (today only) | Dated jobs older than N days are held back. Set `0` to hand off everything. |
+| `REQUIRE_APPLICATION_LINK` | No | `true` | `true` = hold back jobs with no apply URL (recommended — brand safety). Set `false` to hand off everything. Overridable per run with the `require_application_link` request field. |
+| `MAX_JOB_AGE_DAYS` | No | `1` (today only) | Dated jobs must be younger than N days (`1` = today only, `2` = today + yesterday). Set `0` to hand off everything. Overridable per run with the `max_age_days` request field. |
 | `MAX_CONCURRENT_PARSES` | No | `15` | Parallel AI parses. Lower it if you hit LLM rate limits. |
 
 ---

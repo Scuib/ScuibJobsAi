@@ -210,6 +210,8 @@ async def run_bulk_ingestion_background(
     remote_only: bool,
     date_posted: str,
     run_id: str,
+    require_application_link: bool | None = None,
+    max_age_days: int | None = None,
 ):
     try:
         aggregator = build_dynamic_aggregator(
@@ -228,6 +230,8 @@ async def run_bulk_ingestion_background(
             aggregator=aggregator,
             run_id=run_id,
             progress_callback=_progress_log,
+            require_application_link=require_application_link,
+            max_age_days=max_age_days,
         )
     except Exception as e:
         logger.error(f"Bulk ingestion background task {run_id} failed: {e}", exc_info=True)
@@ -274,6 +278,8 @@ async def trigger_bulk_ingestion(
         remote_only=body.remote_only,
         date_posted=body.date_posted,
         run_id=run_id,
+        require_application_link=body.require_application_link,
+        max_age_days=body.max_age_days,
     )
     
     return {
@@ -319,7 +325,10 @@ async def get_run_status(
             errors=run.errors,
             duplicates=run.duplicates,
             skipped=run.skipped,
+            skipped_no_link=run.skipped_no_link,
+            skipped_stale=run.skipped_stale,
             per_source=dict(run.per_source),
+            fetch_errors=dict(run.fetch_errors),
             message="Ingestion run is currently active and processing.",
         )
 
@@ -335,7 +344,10 @@ async def get_run_status(
                 errors=r["errors"],
                 duplicates=r["duplicates"],
                 skipped=r.get("skipped", 0),
+                skipped_no_link=r.get("skipped_no_link", 0),
+                skipped_stale=r.get("skipped_stale", 0),
                 per_source=r["per_source"],
+                fetch_errors=r.get("fetch_errors", {}),
                 message="Ingestion run completed successfully.",
             )
             
@@ -471,10 +483,12 @@ async def get_metrics():
     - `active_runs` — details of any currently running ingestion jobs
     - `recent_runs` — history of the last 10 completed runs with timing and counts
     - `store_errors` — swallowed DB write/read failures (nonzero = silent data loss)
+    - `store_error_detail` — last error message per store operation (root cause)
     """
     snapshot = get_metrics_collector().get_snapshot()
-    from store.stores import STORE_FAILURES
+    from store.stores import STORE_FAILURES, STORE_LAST_ERRORS
     snapshot["store_errors"] = dict(STORE_FAILURES)
+    snapshot["store_error_detail"] = dict(STORE_LAST_ERRORS)
     return snapshot
 
 

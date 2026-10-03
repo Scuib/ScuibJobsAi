@@ -40,15 +40,16 @@ def _max_job_age_days() -> int | None:
 def _is_fresh(job: ParsedJob, max_age_days: int | None) -> bool:
     """
     True when the job is fresh enough to hand off. Jobs with no known
-    posted_date are kept (can't prove they're old) — only dated jobs older
-    than max_age_days are skipped.
+    posted_date are kept (can't prove they're old). Dated jobs must be
+    STRICTLY younger than max_age_days — with whole-day precision the
+    default of 1 means "today only" (age 0), 2 = today + yesterday.
     """
     if max_age_days is None or not job.posted_date:
         return True
     try:
         posted = datetime.fromisoformat(job.posted_date[:10]).date()
         age = (datetime.utcnow().date() - posted).days
-        return age <= max_age_days
+        return age < max_age_days
     except (ValueError, TypeError):
         return True
 
@@ -132,7 +133,7 @@ class JobPipeline:
                 if not _is_fresh(parsed, max_age):
                     logger.warning(
                         f"Skipping handoff for {parsed.id}: posted {parsed.posted_date} "
-                        f"is older than MAX_JOB_AGE_DAYS={max_age}"
+                        f"fails freshness gate (MAX_JOB_AGE_DAYS={max_age})"
                     )
                     return PipelineResult(
                         success=True,
@@ -196,13 +197,33 @@ class JobPipeline:
         aggregator: BaseIngester,
         run_id: str,
         progress_callback: callable = None,
+        require_application_link: bool | None = None,
+        max_age_days: int | None = None,
     ) -> IngestionStats:
         """
         High-throughput bulk ingestion: fetch → dedup → parse → validate → handoff.
         All jobs are automatically sent to the downstream matching algorithm.
+
+        Gate overrides (per-run, env-independent):
+        - require_application_link: None = env default (REQUIRE_APPLICATION_LINK)
+        - max_age_days: None = env default (MAX_JOB_AGE_DAYS); 0 = no age limit
         """
         collector = get_metrics_collector()
         run = collector.start_run(run_id)
+
+        # Live fetch-error view: status polling reads the aggregator's counter.
+        if hasattr(aggregator, "per_source_errors"):
+            run.fetch_errors = aggregator.per_source_errors
+
+        # Effective gates for THIS run (request override wins over env).
+        if require_application_link is None:
+            require_link = _require_application_link()
+        else:
+            require_link = bool(require_application_link)
+        if max_age_days is None:
+            effective_max_age = _max_job_age_days()
+        else:
+            effective_max_age = max_age_days if max_age_days > 0 else None
 
         try:
             logger.info(f"BulkIngestion[{run_id}]: starting fetch phase")
@@ -289,8 +310,6 @@ class JobPipeline:
 
             await self.store.save_parsed_batch(parsed_jobs)
 
-            require_link = _require_application_link()
-            max_age = _max_job_age_days()
             for i, job in enumerate(parsed_jobs):
                 if "[PARSE FAILED]" in job.job_title:
                     # Already counted as error above; still record failure, never hand off
@@ -298,17 +317,19 @@ class JobPipeline:
                     continue
                 if require_link and not _has_application_link(job):
                     run.skipped += 1
+                    run.skipped_no_link += 1
                     logger.warning(
                         f"BulkIngestion[{run_id}]: skipping handoff for {job.id} "
                         f"({job.job_title}): no application URL"
                     )
                     continue
-                if not _is_fresh(job, max_age):
+                if not _is_fresh(job, effective_max_age):
                     run.skipped += 1
+                    run.skipped_stale += 1
                     logger.warning(
                         f"BulkIngestion[{run_id}]: skipping handoff for {job.id} "
-                        f"({job.job_title}): posted {job.posted_date} older than "
-                        f"MAX_JOB_AGE_DAYS={max_age}"
+                        f"({job.job_title}): posted {job.posted_date} fails "
+                        f"freshness gate (max_age_days={effective_max_age})"
                     )
                     continue
                 try:
@@ -325,7 +346,8 @@ class JobPipeline:
 
             logger.info(
                 f"BulkIngestion[{run_id}]: completed — {sent_count}/{len(parsed_jobs)} handed off, "
-                f"{run.skipped} skipped (no application URL), {run.errors} errors, "
+                f"{run.skipped} skipped ({run.skipped_no_link} no link, "
+                f"{run.skipped_stale} stale), {run.errors} errors, "
                 f"{run.duplicates} duplicates"
             )
             if progress_callback:
@@ -348,7 +370,10 @@ class JobPipeline:
             total_errors=run.errors,
             total_duplicates=run.duplicates,
             total_skipped=run.skipped,
+            total_skipped_no_link=run.skipped_no_link,
+            total_skipped_stale=run.skipped_stale,
             per_source=dict(run.per_source),
+            fetch_errors=dict(run.fetch_errors),
             duration_seconds=run.duration_seconds,
             jobs_per_second=run.jobs_per_second,
         )

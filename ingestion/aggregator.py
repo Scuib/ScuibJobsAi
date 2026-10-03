@@ -80,6 +80,8 @@ class MultiSourceAggregator(BaseIngester):
         # Metrics
         self.per_source_counts: dict[str, int] = defaultdict(int)
         self.per_source_dupes: dict[str, int] = defaultdict(int)
+        # Fetch-stage failures by source (surfaced via run status fetch_errors)
+        self.per_source_errors: dict[str, int] = defaultdict(int)
         self.total_yielded: int = 0
         self.total_duplicates: int = 0
 
@@ -116,6 +118,7 @@ class MultiSourceAggregator(BaseIngester):
                 logger.error(
                     f"Aggregator: {source_name} failed with error: {e}"
                 )
+                self.per_source_errors[source_name] += 1
             finally:
                 finished_count += 1
                 await queue.put(None)  # Sentinel: this source is done
@@ -123,7 +126,8 @@ class MultiSourceAggregator(BaseIngester):
         # Launch all ingesters as concurrent tasks
         tasks = []
         for ingester in self.ingesters:
-            source_name = type(ingester).__name__
+            src = getattr(getattr(ingester, "source", None), "value", None)
+            source_name = src or type(ingester).__name__
             task = asyncio.create_task(
                 _run_ingester(ingester, source_name)
             )
