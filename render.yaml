@@ -43,13 +43,15 @@ services:
       - key: INGEST_LOCATIONS
         value: Nigeria
       - key: INGEST_SOURCES
-        value: workable,myjobmag,fuzu,jobgurus,jobberman
+        value: workable,myjobmag,hotnigerianjobs,jobzilla,delonjobs,jsearch_api,adzuna_api
+      - key: INGEST_QUERIES
+        value: frontend developer,backend developer,full stack developer,python developer,mobile developer,devops engineer,ai engineer,software engineer,data analyst,product designer,ui/ux designer,graphics designer,virtual assistant,customer service,sales representative
       - key: TARGET_JOB_COUNT
         value: 200
       - key: REQUIRE_APPLICATION_LINK
         value: true
       - key: MAX_JOB_AGE_DAYS
-        value: 0
+        value: 1
       - key: FETCH_TIMEOUT_SECONDS
         value: 600
       - key: MAX_CONCURRENT_PARSES

@@ -7,11 +7,17 @@ SupabaseStore: production persistence.
 """
 
 import logging
+from collections import Counter
 from datetime import datetime
 from core.interfaces import BaseStore
 from core.models import RawJob, ParsedJob, JobStatus
 
 logger = logging.getLogger(__name__)
+
+# Swallowed store failures, surfaced via GET /metrics -> store_errors.
+# A nonzero value here means data is being lost (missing tables, schema
+# drift, RLS denials) while runs still report success.
+STORE_FAILURES: Counter = Counter()
 
 _SQL_DDL = """
 CREATE TABLE IF NOT EXISTS raw_jobs (
@@ -200,6 +206,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_raw failed: {e}")
+            STORE_FAILURES["save_raw"] += 1
         return job.id
 
     async def save_parsed(self, job: ParsedJob) -> str:
@@ -213,6 +220,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_parsed failed: {e}")
+            STORE_FAILURES["save_parsed"] += 1
         return job.id
 
     async def update_status(self, job_id: str, status: JobStatus, notes: str = "") -> None:
@@ -265,6 +273,7 @@ class SupabaseStore(BaseStore):
             return [ParsedJob(**row) for row in (result.data or [])]
         except Exception as e:
             logger.error(f"Supabase get_all_jobs failed: {e}")
+            STORE_FAILURES["get_all_jobs"] += 1
         return []
 
     async def get_jobs_count(self, status: str | None = None) -> int:
@@ -281,6 +290,7 @@ class SupabaseStore(BaseStore):
             return result.count or 0
         except Exception as e:
             logger.error(f"Supabase get_jobs_count failed: {e}")
+            STORE_FAILURES["get_jobs_count"] += 1
         return 0
 
     # ─── Batch operations (enterprise) ────────────────────────────────────────
@@ -298,6 +308,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_raw_batch failed: {e}")
+            STORE_FAILURES["save_raw_batch"] += 1
         return [job.id for job in jobs]
 
     async def save_parsed_batch(self, jobs: list[ParsedJob]) -> list[str]:
@@ -313,6 +324,7 @@ class SupabaseStore(BaseStore):
             )
         except Exception as e:
             logger.error(f"Supabase save_parsed_batch failed: {e}")
+            STORE_FAILURES["save_parsed_batch"] += 1
         return [job.id for job in jobs]
 
     async def exists_by_external_id(self, external_id: str) -> bool:
@@ -330,6 +342,7 @@ class SupabaseStore(BaseStore):
             return bool(result.data)
         except Exception as e:
             logger.error(f"Supabase exists_by_external_id failed: {e}")
+            STORE_FAILURES["exists_by_external_id"] += 1
         return False
 
     async def get_stats(self) -> dict:
@@ -366,6 +379,7 @@ class SupabaseStore(BaseStore):
             }
         except Exception as e:
             logger.error(f"Supabase get_stats failed: {e}")
+            STORE_FAILURES["get_stats"] += 1
             return {
                 "total_raw": 0,
                 "total_parsed": 0,

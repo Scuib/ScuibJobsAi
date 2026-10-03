@@ -470,8 +470,12 @@ async def get_metrics():
     - `per_source` — lifetime job counts and error counts broken down by source
     - `active_runs` — details of any currently running ingestion jobs
     - `recent_runs` — history of the last 10 completed runs with timing and counts
+    - `store_errors` — swallowed DB write/read failures (nonzero = silent data loss)
     """
-    return get_metrics_collector().get_snapshot()
+    snapshot = get_metrics_collector().get_snapshot()
+    from store.stores import STORE_FAILURES
+    snapshot["store_errors"] = dict(STORE_FAILURES)
+    return snapshot
 
 
 @app.get(
