@@ -63,5 +63,5 @@ ingestion/ → parsing/ → validation/ → store/ → handoff/
 - No linter, formatter, type checker, or CI configured.
 - No pytest — test scripts use raw `assert`.
 - `handoff_output.jsonl` written when `HANDOFF_ENDPOINT_URL` is unset.
-- Supabase tables must be created manually (DDL in `store/stores.py:105-141`).
+- Supabase tables must be created manually (DDL in `store/stores.py:142-185`, including the `ALTER TABLE ... IF NOT EXISTS` migration lines for pre-existing tables). If they are missing, runs still succeed (store errors are swallowed) but `GET /jobs` is always empty, cross-run dedup is dead, and `GET /metrics.store_errors` climbs — check it when the store looks empty.
 - `AUTO_APPROVE_CONFIDENCE_THRESHOLD` env var allows bypassing human review for high-confidence jobs.
