@@ -1,6 +1,6 @@
 # API Documentation — ScuibJobsAi Pipeline
 
-Welcome! This document is the complete guide to the ScuibJobsAi pipeline API. It is written for everyone who touches the system: frontend developers building dashboards, backend developers (Anthony) integrating the matching algorithm, and anyone operating the hourly cron job.
+Welcome! This document is the complete guide to the ScuibJobsAi pipeline API. It is written for everyone who touches the system: frontend developers building dashboards, backend developers (Anthony) integrating the matching algorithm, and anyone operating the 6-hourly cron job.
 
 **Base URL (local):** `http://localhost:8000`
 **Base URL (production):** `https://scuibjobsai.onrender.com`
@@ -29,7 +29,7 @@ Welcome! This document is the complete guide to the ScuibJobsAi pipeline API. It
 7. [Data Models Reference](#data-models-reference)
 8. [How Duplicates Are Prevented](#how-duplicates-are-prevented)
 9. [Posted Dates & UI Filtering](#posted-dates--ui-filtering)
-10. [Hourly Cron Cookbook (Cloudflare)](#hourly-cron-cookbook-cloudflare)
+10. [Cron Cookbook (Cloudflare)](#cron-cookbook-cloudflare)
 11. [Configuration (Environment Variables)](#configuration-environment-variables)
 12. [Frontend Integration Guide](#frontend-integration-guide)
 13. [Troubleshooting](#troubleshooting)
@@ -49,7 +49,7 @@ Fetch from boards → Deduplicate → AI Parse → Validate → Auto Handoff
 Here is what happens at each station, in plain language:
 
 1. **Fetch.** The pipeline contacts the configured job boards (Workable, MyJobMag, Fuzu, JobGurus, Jobberman, JSearch, Indeed RSS, Adzuna) and pulls raw job postings. Each posting keeps its original board URL (`source_url`) so users can always click through to apply.
-2. **Deduplicate.** The same job often appears on multiple boards — or is still listed when the next hourly run starts. The pipeline filters out repeats using the board's own job ID plus a content fingerprint (title + company). See [How Duplicates Are Prevented](#how-duplicates-are-prevented).
+2. **Deduplicate.** The same job often appears on multiple boards — or is still listed when the next cron run starts. The pipeline filters out repeats using the board's own job ID plus a content fingerprint (title + company). See [How Duplicates Are Prevented](#how-duplicates-are-prevented).
 3. **AI Parse.** A language model reads the messy posting and extracts structured fields: title, company, location, salary, skills, experience, employment type, a clean summary, the apply link, and the posted date. The parser chain is **Gemini → Groq → Structured (regex)**: if Gemini is rate-limited or fails, Groq takes over; if both are unavailable, a regex parser still extracts the basics. Every result carries a `confidence` score (0–1) so you know how much to trust it.
 4. **Validate.** Automated rules check the extracted data (is there a title? any skills? sane salary? an apply link? a posted date?). Problems are recorded as `validation_issues` on the job — they are informational annotations, they never block the pipeline by themselves.
 5. **Auto Handoff.** Every parsed job is immediately POSTed to the downstream matching algorithm (`HANDOFF_ENDPOINT_URL`, i.e. Anthony's `POST /api/jobs/ingest/`). Two safety gates can hold a job back (see below); everything else flows straight through. No human clicks anything.
@@ -180,7 +180,7 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 
 ### `POST /ingest/bulk` ⭐ Main Endpoint
 
-**What it does:** Starts a multi-source bulk ingestion run in the background. **This is the primary way to fetch jobs** — it is what the hourly cron calls. In one run it searches across all configured boards, removes duplicates, parses everything with AI, validates, and hands off every qualifying job automatically.
+**What it does:** Starts a multi-source bulk ingestion run in the background. **This is the primary way to fetch jobs** — it is what the cron calls. In one run it searches across all configured boards, removes duplicates, parses everything with AI, validates, and hands off every qualifying job automatically.
 
 **When to use it:** Whenever you want a fresh batch of jobs — on a schedule (cron) or on demand.
 
@@ -225,7 +225,7 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 
 **What it does:** Reports the progress of a bulk run — running or recently finished.
 
-**When to use it:** Poll this every 20–60 seconds after `POST /ingest/bulk` (or from the cron worker) until `state` becomes `completed`. For an hourly cron, this polling response is far more meaningful than the cron platform's own "success" checkmark.
+**When to use it:** Poll this every 20–60 seconds after `POST /ingest/bulk` (or from the cron worker) until `state` becomes `completed`. For a cron run, this polling response is far more meaningful than the cron platform's own "success" checkmark.
 
 **URL parameter:**
 
@@ -544,7 +544,7 @@ This section is for Anthony. Every qualifying job is POSTed as JSON to `HANDOFF_
 
 1. **Store `application_link`** — without it, users see jobs they cannot apply for.
 2. **Store `posted_date`** and expose recency filtering (24h / 1wk / 1mo) on the job-listing endpoints.
-3. **Dedup on `source_job_id`** (unique constraint or upsert) — our `job_id` is stable across hourly runs, so this single check makes redelivery harmless.
+3. **Dedup on `source_job_id`** (unique constraint or upsert) — our `job_id` is stable across cron runs, so this single check makes redelivery harmless.
 
 ---
 
@@ -605,7 +605,7 @@ Returned by ingestion (`POST /ingest/manual`) and retry (`POST /jobs/retry`) end
 
 ## How Duplicates Are Prevented
 
-The same job appears on multiple boards, and boards keep listings up for weeks — so without dedup, an hourly cron would spam the database with copies. Three layers prevent that:
+The same job appears on multiple boards, and boards keep listings up for weeks — so without dedup, a cron would spam the database with copies. Three layers prevent that:
 
 1. **Within a run** — the aggregator drops repeats by board job ID (`external_id`) and by a title+company content fingerprint. These show up as `duplicates` in the run status. A non-zero number here is *good news*.
 2. **Across runs (our side)** — before parsing, each fetched job is checked against the staging store's `external_id` history. **This only survives restarts with Supabase configured** (`SUPABASE_URL` + `SUPABASE_KEY`, tables created). With the in-memory store, a sleep/restart wipes the history and the next run refetches everything.
@@ -632,9 +632,9 @@ For the user-facing **24h / 1 week / 1 month toggles**: filter on the stored `po
 
 ---
 
-## Hourly Cron Cookbook (Cloudflare)
+## Cron Cookbook (Cloudflare)
 
-The production rhythm is one Cloudflare Worker, fired hourly, that POSTs to the bulk endpoint. A minimal-but-robust worker:
+The production rhythm is one Cloudflare Worker, fired every 6 hours, that POSTs to the bulk endpoint. A minimal-but-robust worker:
 
 ```js
 export default {
@@ -655,7 +655,7 @@ export default {
             sources: ["workable", "myjobmag", "hotnigerianjobs", "jobzilla", "delonjobs", "jsearch_api"],
             target_count: 60,
             remote_only: false,
-            date_posted: "month"
+            date_posted: "today"
           })
         });
         const data = await resp.json().catch(() => ({}));
@@ -683,7 +683,7 @@ export default {
 
 **Why the body looks like this:**
 
-- **Few queries + small target (60):** every query × source combo spawns fetchers, and HTML boards scrape detail pages one by one. A 200-target run can outlast free-tier idle timeouts and die mid-run. Small runs finish in minutes.
+- **Dev-first queries + small target (60):** every query × source combo spawns fetchers, and HTML boards scrape detail pages one by one. A big target can outlive free-tier idle timeouts and die mid-run. Small runs finish in minutes; queries are dev-focused so developer jobs win the per-source balance caps.
 - **`locations: ["Nigeria"]`:** strictly Nigerian feed. (Global `"remote"` listings are overwhelmingly foreign; remote *Nigerian* jobs still arrive via the Nigerian boards with `remote: true`.)
 - **`date_posted: "today"`:** same-day-only at the source (JSearch, Adzuna, DelonJobs enforce it); the `MAX_JOB_AGE_DAYS=1` gate holds back anything older downstream. The stored `posted_date` still powers the UI's 24h/1wk/1mo toggles.
 
