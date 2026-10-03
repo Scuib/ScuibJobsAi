@@ -697,3 +697,89 @@ class JobzillaIngester(_BaseHTMLIngester):
 
         title = soup.title.text.strip() if soup.title else ""
         return f"Title: {title}\n\n{content}"
+
+
+class DelonJobsIngester(_BaseHTMLIngester):
+    """
+    Scrapes DelonJobs (jobs.delon.ng) — Nigerian board with a GET keyword
+    search: /search?job_title={query}.
+
+    NOTE: the site's date_posted filter is broken server-side (every value
+    returns zero results), so it is never sent — all matching jobs are
+    fetched and dated best-effort by the parser instead.
+
+    Details at /jobs/{slug}-{hex-id}; trailing hex id is the stable
+    external_id. Cards show relative dates ('3 days ago').
+    """
+
+    SEARCH_URL = "https://jobs.delon.ng/search"
+
+    def __init__(
+        self,
+        query: str = "",
+        max_pages: int = 3,
+        **kwargs,
+    ):
+        super().__init__(
+            source=JobSource.DELONJOBS,
+            query=query,
+            max_pages=max_pages,
+            **kwargs,
+        )
+
+    async def _fetch_job_links(self, client: httpx.AsyncClient, page: int) -> list[tuple[str, str]]:
+        params = {"job_title": self.query}
+        if page > 1:
+            params["page"] = str(page)
+        response = await client.get(
+            self.SEARCH_URL,
+            params=params,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            text = a.text.strip()
+            if len(text) < 5:
+                continue
+            m = re.match(r"^(?:https://jobs\.delon\.ng)?(/jobs/.+-([0-9a-f]{8,})/?)$", href)
+            if not m:
+                continue
+            full_url = href if href.startswith("http") else f"https://jobs.delon.ng{href}"
+            links.append((text, full_url))
+
+        seen: set[str] = set()
+        unique = []
+        for title, link in links:
+            if link not in seen:
+                seen.add(link)
+                unique.append((title, link))
+        return unique
+
+    async def _fetch_detail(self, client: httpx.AsyncClient, url: str) -> str:
+        response = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        content = ""
+        for selector in ["job-details", "job-description", "entry-content", "content", "main"]:
+            el = soup.find(class_=selector)
+            if el:
+                content = el.get_text(separator="\n", strip=True)
+                break
+
+        if not content:
+            article = soup.find("article")
+            if article:
+                content = article.get_text(separator="\n", strip=True)
+        if not content:
+            content = soup.get_text(separator="\n", strip=True)
+
+        title = soup.title.text.strip() if soup.title else ""
+        return f"Title: {title}\n\n{content}"

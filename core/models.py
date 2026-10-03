@@ -89,6 +89,7 @@ class JobSource(str, Enum):
     JOBBERMAN   = "jobberman"
     HOTNIGERIANJOBS = "hotnigerianjobs"
     JOBZILLA    = "jobzilla"
+    DELONJOBS   = "delonjobs"
 
 
 # ─── Stage 1: Raw ─────────────────────────────────────────────────────────────
@@ -172,6 +173,7 @@ class HandoffPayload(BaseModel):
     employment_type:  str | None
     description:      str | None
     application_link: str | None = None   # Where the user clicks to apply
+    application_url:  str | None = None   # Alias of application_link (downstream compat)
     source_url:       str | None = None   # Original board posting URL
     posted_date:      str | None = None   # Board-posted date (YYYY-MM-DD)
     submitted_at:     datetime = Field(default_factory=datetime.utcnow)
@@ -194,6 +196,7 @@ class HandoffPayload(BaseModel):
             employment_type=p.employment_type,
             description=p.description_clean,
             application_link=p.application_link or p.source_url,
+            application_url=p.application_link or p.source_url,
             source_url=p.source_url,
             posted_date=p.posted_date,
         )

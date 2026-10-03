@@ -25,6 +25,7 @@ from ingestion.custom_ingesters import (
     JobbermanIngester,
     HotNigerianJobsIngester,
     JobzillaIngester,
+    DelonJobsIngester,
 )
 from core.models import JobSource
 from parsing.gemini_parser import GeminiParser
@@ -185,6 +186,11 @@ def build_dynamic_aggregator(
         for query in queries:
             ingesters.append(JobzillaIngester(query=query))
 
+    # 11. DelonJobs (Nigerian board, keyword search)
+    if JobSource.DELONJOBS in sources:
+        for query in queries:
+            ingesters.append(DelonJobsIngester(query=query))
+
     # Balance: split the target evenly across distinct sources so the
     # fastest board can't eat the whole quota before slow ones deliver.
     distinct_sources = {s.value for s in sources} or {"default"}
@@ -209,13 +215,13 @@ def build_dynamic_aggregator(
 
 
 def _build_ingester():
-    queries_raw = os.getenv("INGEST_QUERIES", "customer service,virtual assistant,data entry,graphics designer,motion designer,web designer,sales representative,marketing,accounting,software engineer")
+    queries_raw = os.getenv("INGEST_QUERIES", "frontend developer,backend developer,full stack developer,python developer,mobile developer,devops engineer,ai engineer,software engineer,data analyst,product designer,ui/ux designer,graphics designer,virtual assistant,customer service,sales representative")
     queries = [q.strip() for q in queries_raw.split(",") if q.strip()]
 
     locations_raw = os.getenv("INGEST_LOCATIONS", "Nigeria")
     locations = [l.strip() for l in locations_raw.split(",") if l.strip()]
 
-    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,hotnigerianjobs,jobzilla,jsearch_api,adzuna_api")
+    sources_raw = os.getenv("INGEST_SOURCES", "workable,myjobmag,hotnigerianjobs,jobzilla,delonjobs,jsearch_api,adzuna_api")
     source_map = {
         "workable": JobSource.WORKABLE,
         "myjobmag": JobSource.MYJOBMAG,
@@ -224,6 +230,7 @@ def _build_ingester():
         "jobberman": JobSource.JOBBERMAN,
         "hotnigerianjobs": JobSource.HOTNIGERIANJOBS,
         "jobzilla": JobSource.JOBZILLA,
+        "delonjobs": JobSource.DELONJOBS,
         "jsearch_api": JobSource.JSEARCH_API,
         "indeed_rss": JobSource.INDEED_RSS,
         "adzuna_api": JobSource.ADZUNA_API,

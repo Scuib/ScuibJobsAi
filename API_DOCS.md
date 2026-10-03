@@ -57,7 +57,7 @@ Here is what happens at each station, in plain language:
 **The two safety gates** (both configured with environment variables):
 
 - **Apply-link gate** (`REQUIRE_APPLICATION_LINK`, default `true`). Jobs with no apply URL are parsed and stored but **never handed off**. A job users can't apply to never reaches the site — this protects the brand.
-- **Freshness gate** (`MAX_JOB_AGE_DAYS`, default `0` = off). When set to `N`, jobs whose board-posted date is older than N days are parsed and stored but **never handed off**. Jobs with an unknown posted date are always kept (the pipeline never punishes a job for missing data).
+- **Freshness gate** (`MAX_JOB_AGE_DAYS`, default `1` = today only). Dated jobs older than N days are parsed and stored but **never handed off**. Jobs with an unknown posted date are always kept (the pipeline never punishes a job for missing data). Set `0` to disable and hand off everything with dates recorded.
 
 Jobs held back by a gate stay in status `parsed` (visible via `GET /jobs?status=parsed`) and are counted as `skipped` in run statistics — they are not errors. Jobs whose parsing completely failed (`[PARSE FAILED]`) are likewise never handed off.
 
@@ -190,7 +190,7 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 {
   "queries": ["software engineer", "backend developer", "frontend developer", "data analyst"],
   "locations": ["Nigeria"],
-  "sources": ["workable", "myjobmag", "fuzu", "jobgurus", "jobberman"],
+  "sources": ["workable", "myjobmag", "hotnigerianjobs", "jobzilla", "delonjobs", "jsearch_api"],
   "target_count": 60,
   "remote_only": false,
   "date_posted": "month"
@@ -203,10 +203,10 @@ There is no `run_id` for this endpoint — watch `GET /jobs/stats` or `GET /metr
 |-------|------|---------|-------------|
 | `queries` | `list[string]` | `["software engineer"]` | Search keywords. Each query runs against every source × location combination, so keep this list short (3–5 items) — 10 queries × 8 sources means up to 80 fetchers and a very long run. |
 | `locations` | `list[string]` | `["Nigeria"]` | Locations to search in. Use `["Nigeria"]` for a strictly Nigerian feed. (Adding `"remote"` pulls in mostly foreign remote listings — not recommended.) |
-| `sources` | `list[string]` | `["jsearch_api", "indeed_rss", "adzuna_api"]` | Which boards to pull from. Valid values: `workable`, `myjobmag`, `fuzu`, `jobgurus`, `jobberman`, `jsearch_api`, `indeed_rss`, `adzuna_api`. Start with the five Nigerian/global boards; add the API sources once jobs are flowing. |
+| `sources` | `list[string]` | `["jsearch_api", "indeed_rss", "adzuna_api"]` | Which boards to pull from. Valid values: `workable`, `myjobmag`, `hotnigerianjobs`, `jobzilla`, `delonjobs`, `jsearch_api`, `indeed_rss`, `adzuna_api` (plus legacy `fuzu`, `jobgurus`, `jobberman`, kept in code but walled/blocked from server networks). Recommended: `["workable", "myjobmag", "hotnigerianjobs", "jobzilla", "delonjobs", "jsearch_api"]`. |
 | `target_count` | `integer` | `200` | Stop fetching after this many unique jobs (range 1–2000). **Keep this small on free hosting** (50–80): a 200-target run with HTML scraping can take longer than the platform's idle timeout and get killed mid-run. The target is split evenly per board (target ÷ distinct sources), so fast boards can't starve slow ones — capped boards buffer extras and drain them after all boards finish. |
 | `remote_only` | `boolean` | `false` | If `true`, only fetch remote/work-from-home jobs. Only meaningful for JSearch. |
-| `date_posted` | `string` | `"week"` | Recency window, enforced server-side by JSearch and Adzuna. Options: `today`, `3days`, `week`, `month`. Use `"month"` (widest) when you want everything with dates recorded — the UI-side 24h/1wk/1mo toggles filter on the stored `posted_date` afterwards. |
+| `date_posted` | `string` | `"week"` | Recency window, enforced server-side by JSearch, Adzuna, and DelonJobs. Options: `today`, `3days`, `week`, `month`. Use `"today"` for same-day-only runs (matches the default `MAX_JOB_AGE_DAYS=1` gate). |
 
 **Response (returns immediately — the run continues in the background):**
 
@@ -626,7 +626,7 @@ Every job carries `posted_date` (`YYYY-MM-DD`) from the board when it can be det
 Two knobs control date behavior:
 
 - **`date_posted`** (per bulk request: `today` / `3days` / `week` / `month`) — enforced *server-side by JSearch and Adzuna only*. Use a wide window (`month`) when you want everything with dates recorded.
-- **`MAX_JOB_AGE_DAYS`** (env, default `0` = off) — when set to `N`, dated jobs older than N days are held back at handoff (counted as `skipped`). Dateless jobs are always kept.
+- **`MAX_JOB_AGE_DAYS`** (env, default `1` = today only) — dated jobs older than N days are held back at handoff (counted as `skipped`). Dateless jobs are always kept. Set `0` to disable.
 
 For the user-facing **24h / 1 week / 1 month toggles**: filter on the stored `posted_date` (falling back to ingestion time when null). That filtering lives on Anthony's backend once the `posted_date` column exists there.
 
@@ -650,9 +650,9 @@ export default {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            queries: ["customer service", "graphics designer", "motion designer", "web designer", "data entry", "sales representative", "marketing", "accounting", "software engineer"],
+            queries: ["frontend developer", "backend developer", "full stack developer", "python developer", "mobile developer", "devops engineer", "ai engineer", "software engineer", "data analyst", "product designer", "ui/ux designer", "graphics designer", "virtual assistant", "customer service", "sales representative"],
             locations: ["Nigeria"],
-            sources: ["workable", "myjobmag", "fuzu", "jobgurus", "jobberman"],
+            sources: ["workable", "myjobmag", "hotnigerianjobs", "jobzilla", "delonjobs", "jsearch_api"],
             target_count: 60,
             remote_only: false,
             date_posted: "month"
@@ -685,7 +685,7 @@ export default {
 
 - **Few queries + small target (60):** every query × source combo spawns fetchers, and HTML boards scrape detail pages one by one. A 200-target run can outlast free-tier idle timeouts and die mid-run. Small runs finish in minutes.
 - **`locations: ["Nigeria"]`:** strictly Nigerian feed. (Global `"remote"` listings are overwhelmingly foreign; remote *Nigerian* jobs still arrive via the Nigerian boards with `remote: true`.)
-- **`date_posted: "month"`:** widest window — fetch everything *with* dates recorded, and let the UI toggles do the filtering.
+- **`date_posted: "today"`:** same-day-only at the source (JSearch, Adzuna, DelonJobs enforce it); the `MAX_JOB_AGE_DAYS=1` gate holds back anything older downstream. The stored `posted_date` still powers the UI's 24h/1wk/1mo toggles.
 
 **How to verify a cron run actually delivered jobs** (in order of reliability):
 
@@ -715,7 +715,7 @@ Copy `.env.example` to `.env` locally; set the same keys in the Render dashboard
 | `TARGET_JOB_COUNT` | No | `500` | Server-side default target for `/ingest/trigger`. |
 | `JSEARCH_API_KEY` / `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | No | — | Enable the JSearch/Adzuna API sources. Without keys those sources are skipped with a warning. |
 | `REQUIRE_APPLICATION_LINK` | No | `true` | `true` = hold back jobs with no apply URL (recommended — brand safety). Set `false` to hand off everything. |
-| `MAX_JOB_AGE_DAYS` | No | `0` (off) | `0` = hand off all dated jobs. Set `N` to hold back jobs posted more than N days ago. |
+| `MAX_JOB_AGE_DAYS` | No | `1` (today only) | Dated jobs older than N days are held back. Set `0` to hand off everything. |
 | `MAX_CONCURRENT_PARSES` | No | `15` | Parallel AI parses. Lower it if you hit LLM rate limits. |
 
 ---
@@ -783,6 +783,7 @@ Copy `.env.example` to `.env` locally; set the same keys in the Render dashboard
 | Jobberman | `jobberman` | HTML scrape | `www.jobberman.com/jobs?q=` | None | Best-effort text extraction |
 | HotNigerianJobs | `hotnigerianjobs` | HTML scrape (date pages) | `www.hotnigerianjobs.com/jobs/1day/` | None | Exact page date + `Posted on …` strings |
 | Jobzilla | `jobzilla` | HTML scrape | `www.jobzilla.ng/jobs` | None | Best-effort text extraction |
+| DelonJobs | `delonjobs` | HTML scrape (keyword search) | `jobs.delon.ng/search?job_title=` | None | Relative card dates (site's own date filter is broken, never sent) |
 | JSearch | `jsearch_api` | REST API | `jsearch.p.rapidapi.com` | RapidAPI key | Server-side `date_posted` filter + per-job timestamp |
 | Indeed RSS | `indeed_rss` | RSS feed | `www.indeed.com/rss` (sorted by date) | None | Real `pubDate` per item |
 | Adzuna | `adzuna_api` | REST API | `api.adzuna.com` (free: 250 calls/day) | App ID + Key | Server-side `max_days_old` + per-job `created` |
