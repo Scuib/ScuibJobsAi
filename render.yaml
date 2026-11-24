@@ -13,12 +13,14 @@ services:
   - type: web
     name: scuibjobsai
     runtime: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python scripts/migrate.py
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true # push to main redeploys automatically
     envVars:
       # ── Secrets (set in dashboard; never overwritten) ──────────────
+      - key: DATABASE_URL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GROQ_API_KEY

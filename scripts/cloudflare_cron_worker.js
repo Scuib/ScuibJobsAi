@@ -1,22 +1,30 @@
 const API = "https://scuibjobsai.onrender.com";
 const BODY = {
-  queries: ["frontend developer", "backend developer", "full stack developer", "python developer", "mobile developer", "devops engineer", "ai engineer", "software engineer", "data analyst", "product designer", "ui/ux designer", "graphics designer", "virtual assistant", "customer service", "sales representative"],
+  queries: [
+    "frontend developer", "backend developer", "full stack developer",
+    "python developer", "mobile developer", "devops engineer",
+    "ai engineer", "software engineer", "data analyst",
+    "product designer", "ui/ux designer", "graphics designer",
+    "virtual assistant", "customer service", "sales representative"
+  ],
   locations: ["Nigeria"],
   sources: ["workable", "myjobmag", "hotnigerianjobs", "jobzilla", "delonjobs", "jsearch_api"],
   target_count: 60,
   remote_only: false,
-  date_posted: "today",
+  date_posted: "week",
   require_application_link: true,
-  max_age_days: 1
+  max_age_days: 7
 };
 
-addEventListener("fetch", (event) => {
-  event.respondWith(new Response("SCUIB Jobs cron worker (6-hourly)"));
-});
+export default {
+  async fetch(request, env, ctx) {
+    return new Response("SCUIB Jobs cron worker (active)");
+  },
 
-addEventListener("scheduled", (event) => {
-  event.waitUntil(runCron());
-});
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runCron());
+  }
+};
 
 async function runCron() {
   try {

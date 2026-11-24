@@ -1,0 +1,10 @@
+{
+  "name": "scuibjobsai",
+  "version": "2.0.0",
+  "description": "ScuibJobsAi backend job aggregation and parsing pipeline",
+  "scripts": {
+    "migrate": "python scripts/migrate.py",
+    "build": "python scripts/migrate.py",
+    "test": "python scripts/smoke_test.py"
+  }
+}
